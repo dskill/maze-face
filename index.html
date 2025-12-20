@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mazeface</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Mazeface</h1>
+      </header>
+
+      <main>
+        <section id="input-section">
+          <div id="image-input">
+            <input type="file" id="file-input" accept="image/*" />
+            <button id="camera-btn">Camera</button>
+          </div>
+          <div id="preview-container"></div>
+        </section>
+
+        <section id="controls-section">
+          <h3>Image</h3>
+          <div class="control-group">
+            <label for="brightness">Brightness</label>
+            <input type="range" id="brightness" min="-100" max="100" value="0" />
+            <span id="brightness-value">0</span>
+          </div>
+
+          <div class="control-group">
+            <label for="img-contrast">Contrast</label>
+            <input type="range" id="img-contrast" min="50" max="300" value="100" />
+            <span id="img-contrast-value">1.0</span>
+          </div>
+
+          <div class="control-group">
+            <label for="black-point">Black Point</label>
+            <input type="range" id="black-point" min="0" max="128" value="0" />
+            <span id="black-point-value">0</span>
+          </div>
+
+          <div class="control-group">
+            <label for="white-point">White Point</label>
+            <input type="range" id="white-point" min="128" max="255" value="255" />
+            <span id="white-point-value">255</span>
+          </div>
+
+          <div class="control-group">
+            <label for="gamma">Gamma</label>
+            <input type="range" id="gamma" min="50" max="200" value="100" />
+            <span id="gamma-value">1.0</span>
+          </div>
+
+          <div class="control-group">
+            <label for="invert">Invert</label>
+            <input type="checkbox" id="invert" />
+          </div>
+
+          <button id="auto-levels" class="small-btn">Auto Levels</button>
+
+          <h3>Maze</h3>
+          <div class="control-group">
+            <label for="seed">Seed</label>
+            <input type="number" id="seed" value="12345" min="0" max="999999" />
+            <button id="random-seed" class="small-btn">Random</button>
+          </div>
+
+          <div class="control-group">
+            <label for="complexity">Size</label>
+            <input type="range" id="complexity" min="20" max="100" value="50" />
+            <span id="complexity-value">50</span>
+          </div>
+
+          <div class="control-group">
+            <label for="wall-removal">Openness</label>
+            <input type="range" id="wall-removal" min="0" max="100" value="70" />
+            <span id="wall-removal-value">0.7</span>
+          </div>
+
+          <div class="control-group">
+            <label for="extra-walls">Darkness</label>
+            <input type="range" id="extra-walls" min="0" max="100" value="50" />
+            <span id="extra-walls-value">0.5</span>
+          </div>
+
+          <h3>Export</h3>
+          <div class="control-group">
+            <label for="line-width">Line (mm)</label>
+            <input type="range" id="line-width" min="3" max="10" value="5" />
+            <span id="line-width-value">0.5</span>
+          </div>
+        </section>
+
+        <section id="output-section">
+          <div id="maze-container"></div>
+          <button id="export-btn" disabled>Export SVG</button>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
