@@ -6,6 +6,7 @@ interface MazeNode {
   x: number;
   y: number;
   w: number;
+  h: number;
   rawBrightness: number;
   visited: boolean;
   neighbors: { node: MazeNode; side: string; mid: { x: number; y: number } }[];
@@ -17,6 +18,8 @@ interface MazeData {
   solution: MazeNode[];
   startNode: MazeNode | null;
   endNode: MazeNode | null;
+  width: number;
+  height: number;
 }
 
 const App = () => {
@@ -39,7 +42,7 @@ const App = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mazeData = useRef<MazeData>({ nodes: [], solution: [], startNode: null, endNode: null });
+  const mazeData = useRef<MazeData>({ nodes: [], solution: [], startNode: null, endNode: null, width: 0, height: 0 });
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -94,7 +97,19 @@ const App = () => {
     setStatus('Analyzing features...');
 
     setTimeout(() => {
-      const size = params.resolution;
+      // Calculate dimensions based on image aspect ratio
+      const aspectRatio = image.width / image.height;
+      let mazeWidth: number, mazeHeight: number;
+      if (aspectRatio >= 1) {
+        // Landscape or square
+        mazeWidth = params.resolution;
+        mazeHeight = Math.round(params.resolution / aspectRatio);
+      } else {
+        // Portrait
+        mazeHeight = params.resolution;
+        mazeWidth = Math.round(params.resolution * aspectRatio);
+      }
+
       const nodes: MazeNode[] = [];
 
       const offC = document.createElement('canvas');
@@ -104,16 +119,16 @@ const App = () => {
       const imgData = offCtx.getImageData(0, 0, 256, 256).data;
 
       const getRawPixelB = (gx: number, gy: number) => {
-        const sx = Math.max(0, Math.min(255, Math.floor((gx / size) * 255)));
-        const sy = Math.max(0, Math.min(255, Math.floor((gy / size) * 255)));
+        const sx = Math.max(0, Math.min(255, Math.floor((gx / mazeWidth) * 255)));
+        const sy = Math.max(0, Math.min(255, Math.floor((gy / mazeHeight) * 255)));
         const idx = (sy * 256 + sx) * 4;
         return (imgData[idx] + imgData[idx + 1] + imgData[idx + 2]) / 3;
       };
 
-      const subdivide = (x: number, y: number, w: number) => {
-        const rawB = getRawPixelB(x + w / 2, y + w / 2);
+      const subdivide = (x: number, y: number, w: number, h: number) => {
+        const rawB = getRawPixelB(x + w / 2, y + h / 2);
         const rawTL = getRawPixelB(x, y);
-        const rawBR = getRawPixelB(x + w, y + w);
+        const rawBR = getRawPixelB(x + w, y + h);
 
         const bMid = params.contrast * (rawB - 128) + 128;
         const bTL = params.contrast * (rawTL - 128) + 128;
@@ -123,18 +138,21 @@ const App = () => {
         const toneThreshold = ((params.invert ? 255 - bMid : bMid) / 255) * 45 * params.densityBias;
         const finalThreshold = toneThreshold - (edgeStrength / 255) * 30 * params.edgeFocus;
 
-        if (w > params.minCellSize && w > finalThreshold) {
+        const cellSize = Math.min(w, h);
+        if (cellSize > params.minCellSize && cellSize > finalThreshold) {
           const hw = w / 2;
-          subdivide(x, y, hw);
-          subdivide(x + hw, y, hw);
-          subdivide(x, y + hw, hw);
-          subdivide(x + hw, y + hw, hw);
+          const hh = h / 2;
+          subdivide(x, y, hw, hh);
+          subdivide(x + hw, y, hw, hh);
+          subdivide(x, y + hh, hw, hh);
+          subdivide(x + hw, y + hh, hw, hh);
         } else {
           nodes.push({
             id: nodes.length,
             x,
             y,
             w,
+            h,
             rawBrightness: rawB,
             visited: false,
             neighbors: [],
@@ -142,9 +160,9 @@ const App = () => {
           });
         }
       };
-      subdivide(0, 0, size);
+      subdivide(0, 0, mazeWidth, mazeHeight);
 
-      const centerX = size / 2;
+      const centerX = mazeWidth / 2;
       let startNode = nodes[0];
       let endNode = nodes[nodes.length - 1];
       let minTopDist = Infinity;
@@ -159,7 +177,7 @@ const App = () => {
             startNode = node;
           }
         }
-        if (node.y + node.w > size - edgeEps) {
+        if (node.y + node.h > mazeHeight - edgeEps) {
           const dist = Math.abs(node.x + node.w / 2 - centerX);
           if (dist < minBottomDist) {
             minBottomDist = dist;
@@ -174,12 +192,12 @@ const App = () => {
           if (a.id === b.id) return;
           const nEps = 0.1;
           const xOverlap = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-          const yOverlap = Math.min(a.y + a.w, b.y + b.w) - Math.max(a.y, b.y);
+          const yOverlap = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
           const isAdjacent =
             (xOverlap > nEps &&
               (Math.abs(a.y - b.y) <= nEps ||
-                Math.abs(a.y + a.w - b.y) <= nEps ||
-                Math.abs(a.y - (b.y + b.w)) <= nEps)) ||
+                Math.abs(a.y + a.h - b.y) <= nEps ||
+                Math.abs(a.y - (b.y + b.h)) <= nEps)) ||
             (yOverlap > nEps &&
               (Math.abs(a.x - b.x) <= nEps ||
                 Math.abs(a.x + a.w - b.x) <= nEps ||
@@ -190,7 +208,7 @@ const App = () => {
             if (xOverlap > nEps) {
               side = a.y < b.y ? 'bottom' : 'top';
               midX = Math.max(a.x, b.x) + xOverlap / 2;
-              midY = a.y < b.y ? a.y + a.w : b.y + b.w;
+              midY = a.y < b.y ? a.y + a.h : b.y + b.h;
             } else {
               side = a.x < b.x ? 'right' : 'left';
               midX = a.x < b.x ? a.x + a.w : b.x + b.w;
@@ -236,7 +254,7 @@ const App = () => {
         }
       }
 
-      mazeData.current = { nodes, solution, startNode, endNode };
+      mazeData.current = { nodes, solution, startNode, endNode, width: mazeWidth, height: mazeHeight };
       render();
       setIsGenerating(false);
       setStatus('Likeness captured.');
@@ -256,6 +274,15 @@ const App = () => {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    const { nodes, startNode, endNode, width, height } = mazeData.current;
+
+    // Update canvas size to match maze dimensions
+    if (width > 0 && height > 0) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -270,8 +297,6 @@ const App = () => {
     ctx.lineCap = 'square';
     ctx.font = 'bold 14px Courier, monospace';
     ctx.textAlign = 'center';
-
-    const { nodes, startNode, endNode } = mazeData.current;
 
     nodes.forEach((node) => {
       const sides = ['top', 'right', 'bottom', 'left'];
@@ -289,13 +314,13 @@ const App = () => {
               ctx.lineTo(node.x + node.w, node.y);
             } else if (side === 'right') {
               ctx.moveTo(node.x + node.w, node.y);
-              ctx.lineTo(node.x + node.w, node.y + node.w);
+              ctx.lineTo(node.x + node.w, node.y + node.h);
             } else if (side === 'bottom') {
-              ctx.moveTo(node.x, node.y + node.w);
-              ctx.lineTo(node.x + node.w, node.y + node.w);
+              ctx.moveTo(node.x, node.y + node.h);
+              ctx.lineTo(node.x + node.w, node.y + node.h);
             } else if (side === 'left') {
               ctx.moveTo(node.x, node.y);
-              ctx.lineTo(node.x, node.y + node.w);
+              ctx.lineTo(node.x, node.y + node.h);
             }
             ctx.stroke();
           }
@@ -305,13 +330,13 @@ const App = () => {
               ctx.beginPath();
               ctx.lineWidth = getWallThickness(node, nb.node);
               if (side === 'top' || side === 'bottom') {
-                const y = side === 'top' ? node.y : node.y + node.w;
+                const y = side === 'top' ? node.y : node.y + node.h;
                 ctx.moveTo(Math.max(node.x, nb.node.x), y);
                 ctx.lineTo(Math.min(node.x + node.w, nb.node.x + nb.node.w), y);
               } else {
                 const x = side === 'left' ? node.x : node.x + node.w;
                 ctx.moveTo(x, Math.max(node.y, nb.node.y));
-                ctx.lineTo(x, Math.min(node.y + node.w, nb.node.y + nb.node.w));
+                ctx.lineTo(x, Math.min(node.y + node.h, nb.node.y + nb.node.h));
               }
               ctx.stroke();
             }
@@ -327,7 +352,7 @@ const App = () => {
     }
     if (endNode) {
       ctx.textBaseline = 'top';
-      ctx.fillText('END', endNode.x + endNode.w / 2, endNode.y + endNode.w + 5);
+      ctx.fillText('END', endNode.x + endNode.w / 2, endNode.y + endNode.h + 5);
     }
 
     if (params.showSolution && mazeData.current.solution.length > 0) {
@@ -338,17 +363,17 @@ const App = () => {
       ctx.beginPath();
       const sol = mazeData.current.solution;
       ctx.moveTo(sol[0].x + sol[0].w / 2, sol[0].y);
-      ctx.lineTo(sol[0].x + sol[0].w / 2, sol[0].y + sol[0].w / 2);
+      ctx.lineTo(sol[0].x + sol[0].w / 2, sol[0].y + sol[0].h / 2);
       for (let i = 0; i < sol.length - 1; i++) {
         const sharedMid = sol[i].connections.get(sol[i + 1]);
         if (sharedMid) {
           ctx.lineTo(sharedMid.x, sharedMid.y);
-          ctx.lineTo(sol[i + 1].x + sol[i + 1].w / 2, sol[i + 1].y + sol[i + 1].w / 2);
+          ctx.lineTo(sol[i + 1].x + sol[i + 1].w / 2, sol[i + 1].y + sol[i + 1].h / 2);
         }
       }
       ctx.lineTo(
         sol[sol.length - 1].x + sol[sol.length - 1].w / 2,
-        sol[sol.length - 1].y + sol[sol.length - 1].w
+        sol[sol.length - 1].y + sol[sol.length - 1].h
       );
       ctx.stroke();
       ctx.shadowBlur = 0;
@@ -356,9 +381,8 @@ const App = () => {
   };
 
   const downloadSVG = () => {
-    const { nodes, startNode, endNode } = mazeData.current;
+    const { nodes, startNode, endNode, width, height } = mazeData.current;
     if (!nodes.length) return;
-    const res = params.resolution;
     let svgPaths = '';
 
     nodes.forEach((node) => {
@@ -374,10 +398,10 @@ const App = () => {
             const weight = getWallThickness(node);
             if (side === 'top') d = `M ${node.x} ${node.y} L ${node.x + node.w} ${node.y}`;
             else if (side === 'right')
-              d = `M ${node.x + node.w} ${node.y} L ${node.x + node.w} ${node.y + node.w}`;
+              d = `M ${node.x + node.w} ${node.y} L ${node.x + node.w} ${node.y + node.h}`;
             else if (side === 'bottom')
-              d = `M ${node.x} ${node.y + node.w} L ${node.x + node.w} ${node.y + node.w}`;
-            else if (side === 'left') d = `M ${node.x} ${node.y} L ${node.x} ${node.y + node.w}`;
+              d = `M ${node.x} ${node.y + node.h} L ${node.x + node.w} ${node.y + node.h}`;
+            else if (side === 'left') d = `M ${node.x} ${node.y} L ${node.x} ${node.y + node.h}`;
             svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
           }
         } else {
@@ -386,11 +410,11 @@ const App = () => {
               let d = '';
               const weight = getWallThickness(node, nb.node);
               if (side === 'top' || side === 'bottom') {
-                const y = side === 'top' ? node.y : node.y + node.w;
+                const y = side === 'top' ? node.y : node.y + node.h;
                 d = `M ${Math.max(node.x, nb.node.x)} ${y} L ${Math.min(node.x + node.w, nb.node.x + nb.node.w)} ${y}`;
               } else {
                 const x = side === 'left' ? node.x : node.x + node.w;
-                d = `M ${x} ${Math.max(node.y, nb.node.y)} L ${x} ${Math.min(node.y + node.w, nb.node.y + nb.node.w)}`;
+                d = `M ${x} ${Math.max(node.y, nb.node.y)} L ${x} ${Math.min(node.y + node.h, nb.node.y + nb.node.h)}`;
               }
               svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
             }
@@ -400,11 +424,11 @@ const App = () => {
     });
 
     let labels = `<text x="${startNode!.x + startNode!.w / 2}" y="${startNode!.y - 5}" font-family="Courier, monospace" font-size="14" font-weight="bold" fill="black" text-anchor="middle">START</text>`;
-    labels += `<text x="${endNode!.x + endNode!.w / 2}" y="${endNode!.y + endNode!.w + 15}" font-family="Courier, monospace" font-size="14" font-weight="bold" fill="black" text-anchor="middle">END</text>`;
+    labels += `<text x="${endNode!.x + endNode!.w / 2}" y="${endNode!.y + endNode!.h + 15}" font-family="Courier, monospace" font-size="14" font-weight="bold" fill="black" text-anchor="middle">END</text>`;
 
     const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg width="${res}" height="${res}" viewBox="0 -20 ${res} ${res + 40}" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="${res}" height="${res}" fill="white" />
+<svg width="${width}" height="${height}" viewBox="0 -20 ${width} ${height + 40}" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="white" />
   <g id="maze_walls">${svgPaths}</g>
   <g id="labels">${labels}</g>
 </svg>`;
@@ -413,7 +437,7 @@ const App = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `portrait_maze_plotter.svg`;
+    link.download = `maze_${width}x${height}.svg`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -647,12 +671,12 @@ const App = () => {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-blue-900/10 via-transparent to-transparent pointer-events-none" />
         <div
           className="relative group transition-all duration-300"
-          style={{ width: '100%', maxWidth: `${params.resolution}px` }}
+          style={{ width: '100%', maxWidth: `${mazeData.current.width || params.resolution}px` }}
         >
           <canvas
             ref={canvasRef}
-            width={params.resolution}
-            height={params.resolution}
+            width={mazeData.current.width || params.resolution}
+            height={mazeData.current.height || params.resolution}
             className="w-full h-auto bg-white rounded-2xl shadow-2xl transition-transform duration-500"
           />
           {isGenerating && (
@@ -666,7 +690,7 @@ const App = () => {
         </div>
         <div className="flex items-center gap-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-900/50 px-4 py-2 rounded-full border border-white/5">
           <span className="flex items-center gap-1">
-            <Maximize size={10} /> {params.resolution}px
+            <Maximize size={10} /> {mazeData.current.width || params.resolution} x {mazeData.current.height || params.resolution}
           </span>
           <span className="w-1 h-1 bg-slate-700 rounded-full" />
           <span>LIVE INK WEIGHTING</span>
