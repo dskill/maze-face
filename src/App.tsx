@@ -49,6 +49,7 @@ const App = () => {
   });
   const [status, setStatus] = useState('Waiting for image...');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [mazeGenerated, setMazeGenerated] = useState(0);
 
   // Plotter state
   const [plotterSupported] = useState(isWebSerialSupported());
@@ -275,7 +276,7 @@ const App = () => {
       }
 
       mazeData.current = { nodes, solution, startNode, endNode, width: mazeWidth, height: mazeHeight };
-      render();
+      setMazeGenerated(prev => prev + 1);
       setIsGenerating(false);
       setStatus('Likeness captured.');
     }, 100);
@@ -647,6 +648,7 @@ const App = () => {
   useEffect(() => {
     render();
   }, [
+    mazeGenerated,
     params.showSolution,
     params.wallThickness,
     params.shadingIntensity,
