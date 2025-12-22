@@ -69,7 +69,6 @@ const App = () => {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const mazeData = useRef<MazeData>({ nodes: [], solution: [], startNode: null, endNode: null, width: 0, height: 0 });
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -88,14 +87,6 @@ const App = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleCameraClick = () => {
-    const input = fileInputRef.current;
-    if (input) {
-      input.setAttribute('capture', 'environment');
-      input.click();
-      setTimeout(() => input.removeAttribute('capture'), 100);
-    }
-  };
 
   const updatePreview = (img: HTMLImageElement) => {
     const canvas = previewRef.current;
@@ -672,22 +663,12 @@ const App = () => {
             <label className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase">
               <Camera size={14} /> 1. Source Image
             </label>
-            <div className="flex gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleUpload}
-                className="flex-1 text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
-              />
-              <button
-                onClick={handleCameraClick}
-                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1 text-xs font-bold transition-all"
-                title="Take photo with camera"
-              >
-                <Camera size={14} />
-              </button>
-            </div>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleUpload}
+              className="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+            />
             <canvas
               ref={previewRef}
               width="200"
