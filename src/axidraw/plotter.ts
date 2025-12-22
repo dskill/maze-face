@@ -175,7 +175,7 @@ export class Plotter {
     this.notifyStatus();
 
     try {
-      // Ensure pen is up and at home
+      // Ensure pen is up to start
       await this.ebb.penUp();
 
       for (let i = 0; i < segments.length; i++) {
@@ -193,10 +193,15 @@ export class Plotter {
         this.progress.current = i + 1;
         this.notifyStatus();
 
-        // Move to start (pen up)
-        await this.ebb.moveToWithoutDrawing(segment.x1, segment.y1);
+        const pos = this.ebb.getPosition();
+        const atStart = pos.x === segment.x1 && pos.y === segment.y1;
 
-        // Draw to end with specified pen height
+        if (!atStart) {
+          // Reposition: pen up + travel to the segment start
+          await this.ebb.moveToWithoutDrawing(segment.x1, segment.y1);
+        }
+
+        // Draw to end with specified pen height (keep pen down if already drawing)
         await this.ebb.lineTo(segment.x2, segment.y2, segment.penHeight);
       }
 

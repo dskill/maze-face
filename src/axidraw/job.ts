@@ -276,18 +276,31 @@ export function estimatePlotTime(
   let totalSteps = 0;
   let lastX = 0;
   let lastY = 0;
+  let penMoves = 0;
 
   for (const seg of segments) {
-    // Travel to start
-    totalSteps += Math.hypot(seg.x1 - lastX, seg.y1 - lastY);
+    const needsReposition = seg.x1 !== lastX || seg.y1 !== lastY;
+
+    if (needsReposition) {
+      // Travel to start (pen up reposition)
+      totalSteps += Math.hypot(seg.x1 - lastX, seg.y1 - lastY);
+      // Pen up + pen down around the reposition
+      penMoves += 2;
+    }
     // Draw segment
     totalSteps += Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
     lastX = seg.x2;
     lastY = seg.y2;
   }
 
+  // If we start with pen up and the first segment starts at origin, we still need
+  // one "pen down" to begin drawing. If the first segment requires reposition,
+  // the reposition logic already counted the down.
+  if (segments.length > 0 && segments[0].x1 === 0 && segments[0].y1 === 0) {
+    penMoves += 1;
+  }
+
   // Add pen up/down time (approx 0.3s each)
-  const penMoves = segments.length * 2;
   const penTime = penMoves * 0.3;
 
   return totalSteps / stepRate + penTime;
