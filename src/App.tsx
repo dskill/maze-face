@@ -435,8 +435,9 @@ const App = () => {
     const { nodes, startNode, endNode, width, height } = mazeData.current;
     if (!nodes.length) return;
 
-    // Collect all paths with their weights
-    const pathsWithWeights: { d: string; weight: number }[] = [];
+    // Collect all wall segments with their weights
+    type SegmentWithWeight = { x1: number; y1: number; x2: number; y2: number; weight: number };
+    const segmentsWithWeights: SegmentWithWeight[] = [];
 
     nodes.forEach((node) => {
       const sides = ['top', 'right', 'bottom', 'left'];
@@ -447,29 +448,38 @@ const App = () => {
             (node.id === startNode?.id && side === 'top') ||
             (node.id === endNode?.id && side === 'bottom');
           if (!isOpen) {
-            let d = '';
             const weight = getWallThickness(node);
-            if (side === 'top') d = `M ${node.x} ${node.y} L ${node.x + node.w} ${node.y}`;
+            if (side === 'top') segmentsWithWeights.push({ x1: node.x, y1: node.y, x2: node.x + node.w, y2: node.y, weight });
             else if (side === 'right')
-              d = `M ${node.x + node.w} ${node.y} L ${node.x + node.w} ${node.y + node.h}`;
+              segmentsWithWeights.push({ x1: node.x + node.w, y1: node.y, x2: node.x + node.w, y2: node.y + node.h, weight });
             else if (side === 'bottom')
-              d = `M ${node.x} ${node.y + node.h} L ${node.x + node.w} ${node.y + node.h}`;
-            else if (side === 'left') d = `M ${node.x} ${node.y} L ${node.x} ${node.y + node.h}`;
-            pathsWithWeights.push({ d, weight });
+              segmentsWithWeights.push({ x1: node.x, y1: node.y + node.h, x2: node.x + node.w, y2: node.y + node.h, weight });
+            else if (side === 'left')
+              segmentsWithWeights.push({ x1: node.x, y1: node.y, x2: node.x, y2: node.y + node.h, weight });
           }
         } else {
           boundaryNeighbors.forEach((nb) => {
             if (node.id < nb.node.id && !node.connections.has(nb.node)) {
-              let d = '';
               const weight = getWallThickness(node, nb.node);
               if (side === 'top' || side === 'bottom') {
                 const y = side === 'top' ? node.y : node.y + node.h;
-                d = `M ${Math.max(node.x, nb.node.x)} ${y} L ${Math.min(node.x + node.w, nb.node.x + nb.node.w)} ${y}`;
+                segmentsWithWeights.push({
+                  x1: Math.max(node.x, nb.node.x),
+                  y1: y,
+                  x2: Math.min(node.x + node.w, nb.node.x + nb.node.w),
+                  y2: y,
+                  weight,
+                });
               } else {
                 const x = side === 'left' ? node.x : node.x + node.w;
-                d = `M ${x} ${Math.max(node.y, nb.node.y)} L ${x} ${Math.min(node.y + node.h, nb.node.y + nb.node.h)}`;
+                segmentsWithWeights.push({
+                  x1: x,
+                  y1: Math.max(node.y, nb.node.y),
+                  x2: x,
+                  y2: Math.min(node.y + node.h, nb.node.y + nb.node.h),
+                  weight,
+                });
               }
-              pathsWithWeights.push({ d, weight });
             }
           });
         }
@@ -479,8 +489,112 @@ const App = () => {
     let svgPaths = '';
 
     if (params.svgColorByWeight) {
+      // Laser mode: stitch + simplify to reduce element count (Glowforge loads much faster).
+      type Seg = { x1: number; y1: number; x2: number; y2: number };
+      const roundKey = (n: number) => Math.round(n * 1000) / 1000; // stable keying for float coords
+      const key = (x: number, y: number) => `${roundKey(x)},${roundKey(y)}`;
+      const reverseSeg = (s: Seg): Seg => ({ x1: s.x2, y1: s.y2, x2: s.x1, y2: s.y1 });
+
+      const simplifyCollinear = (pts: { x: number; y: number }[]) => {
+        if (pts.length <= 2) return pts;
+        const out: { x: number; y: number }[] = [pts[0]];
+        const eps = 1e-9;
+        for (let i = 1; i < pts.length - 1; i++) {
+          const a = out[out.length - 1];
+          const b = pts[i];
+          const c = pts[i + 1];
+          const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+          if (Math.abs(cross) < eps) {
+            // b is collinear; skip it
+            continue;
+          }
+          out.push(b);
+        }
+        out.push(pts[pts.length - 1]);
+        return out;
+      };
+
+      const chainAndPathD = (segs: Seg[]): string => {
+        if (segs.length === 0) return '';
+
+        const used = new Array<boolean>(segs.length).fill(false);
+        const adj = new Map<string, number[]>();
+        for (let i = 0; i < segs.length; i++) {
+          const s = segs[i];
+          const k1 = key(s.x1, s.y1);
+          const k2 = key(s.x2, s.y2);
+          (adj.get(k1) ?? (adj.set(k1, []), adj.get(k1)!)).push(i);
+          (adj.get(k2) ?? (adj.set(k2, []), adj.get(k2)!)).push(i);
+        }
+
+        const degree = new Map<string, number>();
+        for (const [k, arr] of adj.entries()) degree.set(k, arr.length);
+
+        const takeUnusedAt = (k: string): number | null => {
+          const list = adj.get(k);
+          if (!list) return null;
+          for (const idx of list) if (!used[idx]) return idx;
+          return null;
+        };
+
+        const buildChain = (startIdx: number): Seg[] => {
+          used[startIdx] = true;
+          let chain: Seg[] = [segs[startIdx]];
+
+          // forward
+          while (true) {
+            const endK = key(chain[chain.length - 1].x2, chain[chain.length - 1].y2);
+            const nextIdx = takeUnusedAt(endK);
+            if (nextIdx === null) break;
+            used[nextIdx] = true;
+            const cand = segs[nextIdx];
+            chain.push(key(cand.x1, cand.y1) === endK ? cand : reverseSeg(cand));
+          }
+
+          // backward
+          while (true) {
+            const startK = key(chain[0].x1, chain[0].y1);
+            const nextIdx = takeUnusedAt(startK);
+            if (nextIdx === null) break;
+            used[nextIdx] = true;
+            const cand = segs[nextIdx];
+            chain = [key(cand.x2, cand.y2) === startK ? cand : reverseSeg(cand), ...chain];
+          }
+
+          return chain;
+        };
+
+        const endpoints = [...adj.keys()].sort((a, b) => (degree.get(a)! - degree.get(b)!));
+        const chains: Seg[][] = [];
+        for (const ep of endpoints) {
+          const idx = takeUnusedAt(ep);
+          if (idx !== null && !used[idx]) chains.push(buildChain(idx));
+        }
+        for (let i = 0; i < segs.length; i++) {
+          if (!used[i]) chains.push(buildChain(i));
+        }
+
+        const fmt = (n: number) => {
+          const v = Math.round(n * 1000) / 1000;
+          return Number.isInteger(v) ? String(v) : String(v);
+        };
+
+        // Emit a single path "d" with multiple subpaths (one per chain)
+        const parts: string[] = [];
+        for (const chain of chains) {
+          const pts: { x: number; y: number }[] = [{ x: chain[0].x1, y: chain[0].y1 }];
+          for (const s of chain) pts.push({ x: s.x2, y: s.y2 });
+          const simp = simplifyCollinear(pts);
+          if (simp.length < 2) continue;
+          let d = `M ${fmt(simp[0].x)} ${fmt(simp[0].y)}`;
+          for (let i = 1; i < simp.length; i++) d += ` L ${fmt(simp[i].x)} ${fmt(simp[i].y)}`;
+          parts.push(d);
+        }
+        return parts.join(' ');
+      };
+
       // Find min/max weights to create 4 buckets
-      const weights = pathsWithWeights.map(p => p.weight);
+      const weights = segmentsWithWeights.map(p => p.weight);
       const minWeight = Math.min(...weights);
       const maxWeight = Math.max(...weights);
       const range = maxWeight - minWeight;
@@ -493,9 +607,9 @@ const App = () => {
         '#000000', // Black (heaviest)
       ];
 
-      // Group paths into 4 buckets
-      const buckets: string[][] = [[], [], [], []];
-      pathsWithWeights.forEach(({ d, weight }) => {
+      // Group segments into 4 buckets
+      const buckets: Seg[][] = [[], [], [], []];
+      segmentsWithWeights.forEach(({ x1, y1, x2, y2, weight }) => {
         let bucketIndex: number;
         if (range === 0) {
           bucketIndex = 0;
@@ -503,24 +617,24 @@ const App = () => {
           const normalized = (weight - minWeight) / range;
           bucketIndex = Math.min(3, Math.floor(normalized * 4));
         }
-        buckets[bucketIndex].push(d);
+        buckets[bucketIndex].push({ x1, y1, x2, y2 });
       });
 
       // Output each bucket as a group
       const bucketLabels = ['Lightest', 'Light', 'Dark', 'Darkest'];
-      buckets.forEach((paths, index) => {
-        if (paths.length > 0) {
+      buckets.forEach((bucketSegs, index) => {
+        if (bucketSegs.length > 0) {
           svgPaths += `  <!-- ${bucketLabels[index]} -->\n`;
-          svgPaths += `  <g stroke="${colors[index]}" fill="none">\n`;
-          paths.forEach(d => {
-            svgPaths += `    <path d="${d}" />\n`;
-          });
+          svgPaths += `  <g stroke="${colors[index]}" fill="none" stroke-linecap="square">\n`;
+          const d = chainAndPathD(bucketSegs);
+          svgPaths += `    <path d="${d}" />\n`;
           svgPaths += `  </g>\n`;
         }
       });
     } else {
       // Original behavior - all black
-      pathsWithWeights.forEach(({ d, weight }) => {
+      segmentsWithWeights.forEach(({ x1, y1, x2, y2, weight }) => {
+        const d = `M ${x1} ${y1} L ${x2} ${y2}`;
         svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
       });
     }

@@ -66,7 +66,7 @@ export function generatePlotJob(
   const sortedWalls = optimizePath(walls);
 
   // Convert to plot segments with plotter coordinates
-  const segments: PlotSegment[] = [];
+  let segments: PlotSegment[] = [];
 
   for (const wall of sortedWalls) {
     const start = plotter.mazeToSteps(wall.x1, wall.y1, mazeData.width, mazeData.height);
@@ -85,7 +85,145 @@ export function generatePlotJob(
     });
   }
 
+  // Further reduce pen lifts by stitching segments that share endpoints into continuous chains.
+  // This is safe: we only chain on exact endpoint matches (integer step coordinates), so we
+  // never introduce travel moves while the pen is down.
+  segments = stitchSegmentsIntoChains(segments);
+
   return segments;
+}
+
+type PointKey = string;
+
+function pointKey(x: number, y: number): PointKey {
+  // Steps are integers; stringify exactly.
+  return `${x},${y}`;
+}
+
+function reversedSegment(seg: PlotSegment): PlotSegment {
+  return { ...seg, x1: seg.x2, y1: seg.y2, x2: seg.x1, y2: seg.y1 };
+}
+
+/**
+ * Stitch segments into endpoint-connected chains and order chains to minimize travel.
+ * This is not globally optimal, but it drastically reduces pen lifts vs. naive segment ordering.
+ */
+function stitchSegmentsIntoChains(segments: PlotSegment[]): PlotSegment[] {
+  if (segments.length <= 1) return segments;
+
+  const n = segments.length;
+  const used = new Array<boolean>(n).fill(false);
+
+  // Build adjacency from endpoint -> segment indices
+  const adj = new Map<PointKey, number[]>();
+  for (let i = 0; i < n; i++) {
+    const s = segments[i];
+    const k1 = pointKey(s.x1, s.y1);
+    const k2 = pointKey(s.x2, s.y2);
+    (adj.get(k1) ?? (adj.set(k1, []), adj.get(k1)!)).push(i);
+    (adj.get(k2) ?? (adj.set(k2, []), adj.get(k2)!)).push(i);
+  }
+
+  // Build chains by walking from endpoints. Prefer starting at degree-1 nodes (open ends).
+  const degree = new Map<PointKey, number>();
+  for (const [k, arr] of adj.entries()) degree.set(k, arr.length);
+
+  const chains: PlotSegment[][] = [];
+
+  function takeNextFromEndpoint(endpoint: PointKey): number | null {
+    const list = adj.get(endpoint);
+    if (!list) return null;
+    for (const idx of list) {
+      if (!used[idx]) return idx;
+    }
+    return null;
+  }
+
+  function buildChainFromSegment(startIdx: number): PlotSegment[] {
+    used[startIdx] = true;
+    let chain: PlotSegment[] = [segments[startIdx]];
+
+    // Extend forward from chain end
+    while (true) {
+      const endKey = pointKey(chain[chain.length - 1].x2, chain[chain.length - 1].y2);
+      const nextIdx = takeNextFromEndpoint(endKey);
+      if (nextIdx === null) break;
+      used[nextIdx] = true;
+      const cand = segments[nextIdx];
+      const oriented = pointKey(cand.x1, cand.y1) === endKey ? cand : reversedSegment(cand);
+      chain.push(oriented);
+    }
+
+    // Extend backward from chain start
+    while (true) {
+      const startKey = pointKey(chain[0].x1, chain[0].y1);
+      const nextIdx = takeNextFromEndpoint(startKey);
+      if (nextIdx === null) break;
+      used[nextIdx] = true;
+      const cand = segments[nextIdx];
+      const oriented = pointKey(cand.x2, cand.y2) === startKey ? cand : reversedSegment(cand);
+      chain = [oriented, ...chain];
+    }
+
+    return chain;
+  }
+
+  // First, start chains from endpoints with odd/low degree (typically maze borders/corners)
+  const endpoints = [...adj.keys()].sort((a, b) => (degree.get(a)! - degree.get(b)!));
+  for (const ep of endpoints) {
+    // If there's an unused segment touching this endpoint, start a chain there.
+    const idx = takeNextFromEndpoint(ep);
+    if (idx !== null && !used[idx]) {
+      chains.push(buildChainFromSegment(idx));
+    }
+  }
+
+  // Then, start chains from any remaining unused segments (closed loops etc.)
+  for (let i = 0; i < n; i++) {
+    if (!used[i]) chains.push(buildChainFromSegment(i));
+  }
+
+  // Order chains by nearest-neighbor in endpoint space; allow reversing a chain.
+  const remainingChains = chains.slice();
+  const ordered: PlotSegment[] = [];
+  let curX = 0;
+  let curY = 0;
+
+  while (remainingChains.length > 0) {
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    let bestReverse = false;
+
+    for (let i = 0; i < remainingChains.length; i++) {
+      const ch = remainingChains[i];
+      const sx = ch[0].x1, sy = ch[0].y1;
+      const ex = ch[ch.length - 1].x2, ey = ch[ch.length - 1].y2;
+      const dStart = Math.hypot(sx - curX, sy - curY);
+      const dEnd = Math.hypot(ex - curX, ey - curY);
+      if (dStart < bestDist) {
+        bestDist = dStart;
+        bestIdx = i;
+        bestReverse = false;
+      }
+      if (dEnd < bestDist) {
+        bestDist = dEnd;
+        bestIdx = i;
+        bestReverse = true;
+      }
+    }
+
+    let chosen = remainingChains.splice(bestIdx, 1)[0];
+    if (bestReverse) {
+      chosen = chosen.slice().reverse().map(reversedSegment);
+    }
+
+    ordered.push(...chosen);
+    const last = ordered[ordered.length - 1];
+    curX = last.x2;
+    curY = last.y2;
+  }
+
+  return ordered;
 }
 
 /**
