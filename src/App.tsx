@@ -41,6 +41,7 @@ const App = () => {
     edgeFocus: 1.0,
     invert: false,
     wallThickness: 1.2,
+    svgIncludeLabels: false,
     shadingIntensity: 2.0,
     showSolution: false,
     showImage: false,
@@ -478,26 +479,35 @@ const App = () => {
       });
     });
 
-    const startCenterX = startNode!.x + startNode!.w / 2;
-    const endCenterX = endNode!.x + endNode!.w / 2;
-    const endBottom = endNode!.y + endNode!.h;
+    let labels = '';
+    let viewBoxY = 0;
+    let viewBoxHeight = height;
 
-    // START label and arrow
-    let labels = `<text x="${startCenterX}" y="${startNode!.y - 20}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">START</text>`;
-    // Down arrow pointing into maze
-    labels += `<path d="M ${startCenterX} ${startNode!.y - 14} L ${startCenterX} ${startNode!.y - 3}" stroke="black" stroke-width="0.75" fill="none" />`;
-    labels += `<path d="M ${startCenterX - 3} ${startNode!.y - 7} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 3} ${startNode!.y - 7}" stroke="black" stroke-width="0.75" fill="none" />`;
+    if (params.svgIncludeLabels) {
+      const startCenterX = startNode!.x + startNode!.w / 2;
+      const endCenterX = endNode!.x + endNode!.w / 2;
+      const endBottom = endNode!.y + endNode!.h;
 
-    // END arrow and label
-    labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 14}" stroke="black" stroke-width="0.75" fill="none" />`;
-    labels += `<path d="M ${endCenterX - 3} ${endBottom + 10} L ${endCenterX} ${endBottom + 14} L ${endCenterX + 3} ${endBottom + 10}" stroke="black" stroke-width="0.75" fill="none" />`;
-    labels += `<text x="${endCenterX}" y="${endBottom + 28}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">END</text>`;
+      // START label and arrow
+      labels = `<text x="${startCenterX}" y="${startNode!.y - 20}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">START</text>`;
+      // Down arrow pointing into maze
+      labels += `<path d="M ${startCenterX} ${startNode!.y - 14} L ${startCenterX} ${startNode!.y - 3}" stroke="black" stroke-width="0.75" fill="none" />`;
+      labels += `<path d="M ${startCenterX - 3} ${startNode!.y - 7} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 3} ${startNode!.y - 7}" stroke="black" stroke-width="0.75" fill="none" />`;
+
+      // END arrow and label
+      labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 14}" stroke="black" stroke-width="0.75" fill="none" />`;
+      labels += `<path d="M ${endCenterX - 3} ${endBottom + 10} L ${endCenterX} ${endBottom + 14} L ${endCenterX + 3} ${endBottom + 10}" stroke="black" stroke-width="0.75" fill="none" />`;
+      labels += `<text x="${endCenterX}" y="${endBottom + 28}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">END</text>`;
+
+      viewBoxY = -40;
+      viewBoxHeight = height + 80;
+    }
 
     const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg width="${width}" height="${height}" viewBox="0 -40 ${width} ${height + 80}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${width}" height="${height}" viewBox="${viewBoxY} ${viewBoxY} ${width} ${viewBoxHeight}" xmlns="http://www.w3.org/2000/svg">
   <rect x="0" y="0" width="${width}" height="${height}" fill="white" />
   <g id="maze_walls">${svgPaths}</g>
-  <g id="labels">${labels}</g>
+  ${labels ? `<g id="labels">${labels}</g>` : ''}
 </svg>`;
 
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
@@ -1066,6 +1076,15 @@ const App = () => {
             >
               <Download size={14} /> SVG
             </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={params.svgIncludeLabels}
+              onChange={(e) => setParams({ ...params, svgIncludeLabels: e.target.checked })}
+              className="rounded border-slate-700 bg-slate-900"
+            />
+            <span className="text-xs text-slate-400">Include START/END in SVG</span>
           </div>
         </div>
       </div>
