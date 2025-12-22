@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize, Plug, Unplug, Square, Pause, Home, ChevronUp, ChevronDown } from 'lucide-react';
+import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize, Plug, Unplug, Square, Pause, Home } from 'lucide-react';
 import {
   connectAxiDraw,
   isWebSerialSupported,
@@ -42,6 +42,7 @@ const App = () => {
     invert: false,
     wallThickness: 1.0,
     svgIncludeLabels: false,
+    svgColorByWeight: false,
     shadingIntensity: 1.8,
     showSolution: false,
     showImage: false,
@@ -62,11 +63,12 @@ const App = () => {
   const [plotterSettings, setPlotterSettings] = useState({
     paperSize: '6x6' as keyof typeof PAPER_SIZES,
     speed: 50,
-    penUpHeight: 60,
-    penDownHeight: 40,
+    penUpHeight: 70,
+    penDownLight: 45,  // Lightest stroke (bright areas)
+    penDownDark: 25,   // Heaviest stroke (dark areas)
+    invertPenLift: false,
   });
   const [estimatedTime, setEstimatedTime] = useState<string | null>(null);
-  const [testPenHeight, setTestPenHeight] = useState(50);
   const plotterRef = useRef<Plotter | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -432,7 +434,9 @@ const App = () => {
   const downloadSVG = () => {
     const { nodes, startNode, endNode, width, height } = mazeData.current;
     if (!nodes.length) return;
-    let svgPaths = '';
+
+    // Collect all paths with their weights
+    const pathsWithWeights: { d: string; weight: number }[] = [];
 
     nodes.forEach((node) => {
       const sides = ['top', 'right', 'bottom', 'left'];
@@ -451,7 +455,7 @@ const App = () => {
             else if (side === 'bottom')
               d = `M ${node.x} ${node.y + node.h} L ${node.x + node.w} ${node.y + node.h}`;
             else if (side === 'left') d = `M ${node.x} ${node.y} L ${node.x} ${node.y + node.h}`;
-            svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
+            pathsWithWeights.push({ d, weight });
           }
         } else {
           boundaryNeighbors.forEach((nb) => {
@@ -465,18 +469,79 @@ const App = () => {
                 const x = side === 'left' ? node.x : node.x + node.w;
                 d = `M ${x} ${Math.max(node.y, nb.node.y)} L ${x} ${Math.min(node.y + node.h, nb.node.y + nb.node.h)}`;
               }
-              svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
+              pathsWithWeights.push({ d, weight });
             }
           });
         }
       });
     });
 
-    let labels = '';
-    let viewBoxY = 0;
-    let viewBoxHeight = height;
+    let svgPaths = '';
 
-    if (params.svgIncludeLabels) {
+    if (params.svgColorByWeight) {
+      // Find min/max weights to create 4 buckets
+      const weights = pathsWithWeights.map(p => p.weight);
+      const minWeight = Math.min(...weights);
+      const maxWeight = Math.max(...weights);
+      const range = maxWeight - minWeight;
+
+      // 4 distinct colors for Glowforge
+      const colors = [
+        '#FF0000', // Red (lightest)
+        '#0000FF', // Blue
+        '#00FF00', // Green
+        '#000000', // Black (heaviest)
+      ];
+
+      // Group paths into 4 buckets
+      const buckets: string[][] = [[], [], [], []];
+      pathsWithWeights.forEach(({ d, weight }) => {
+        let bucketIndex: number;
+        if (range === 0) {
+          bucketIndex = 0;
+        } else {
+          const normalized = (weight - minWeight) / range;
+          bucketIndex = Math.min(3, Math.floor(normalized * 4));
+        }
+        buckets[bucketIndex].push(d);
+      });
+
+      // Output each bucket as a group
+      const bucketLabels = ['Lightest', 'Light', 'Dark', 'Darkest'];
+      buckets.forEach((paths, index) => {
+        if (paths.length > 0) {
+          svgPaths += `  <!-- ${bucketLabels[index]} -->\n`;
+          svgPaths += `  <g stroke="${colors[index]}" fill="none">\n`;
+          paths.forEach(d => {
+            svgPaths += `    <path d="${d}" />\n`;
+          });
+          svgPaths += `  </g>\n`;
+        }
+      });
+    } else {
+      // Original behavior - all black
+      pathsWithWeights.forEach(({ d, weight }) => {
+        svgPaths += `<path d="${d}" stroke="black" stroke-width="${weight.toFixed(2)}" fill="none" stroke-linecap="square" />\n`;
+      });
+    }
+
+    let labels = '';
+    let viewBoxX = 0;
+    let viewBoxY = 0;
+    let viewBoxWidth = width;
+    let viewBoxHeight = height;
+    let border = '';
+
+    if (params.svgColorByWeight) {
+      // Add margin for border that extends beyond label area
+      const margin = 50;
+      viewBoxX = -margin;
+      viewBoxY = -margin;
+      viewBoxWidth = width + margin * 2;
+      viewBoxHeight = height + margin * 2;
+      // Simple rectangle border in a 5th color (magenta)
+      border = `<rect x="${-margin + 5}" y="${-margin + 5}" width="${width + margin * 2 - 10}" height="${height + margin * 2 - 10}" stroke="#FF00FF" fill="none" />`;
+    } else if (params.svgIncludeLabels) {
       const startCenterX = startNode!.x + startNode!.w / 2;
       const endCenterX = endNode!.x + endNode!.w / 2;
       const endBottom = endNode!.y + endNode!.h;
@@ -497,8 +562,9 @@ const App = () => {
     }
 
     const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg width="${width}" height="${height}" viewBox="${viewBoxY} ${viewBoxY} ${width} ${viewBoxHeight}" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="${width}" height="${height}" fill="white" />
+<svg width="${viewBoxWidth}" height="${viewBoxHeight}" viewBox="${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}" xmlns="http://www.w3.org/2000/svg">
+  ${!params.svgColorByWeight ? `<rect x="0" y="0" width="${width}" height="${height}" fill="white" />` : ''}
+  ${border ? `<g id="border">${border}</g>` : ''}
   <g id="maze_walls">${svgPaths}</g>
   ${labels ? `<g id="labels">${labels}</g>` : ''}
 </svg>`;
@@ -526,7 +592,9 @@ const App = () => {
         marginY: 10,
         speed: plotterSettings.speed,
         penUpPosition: plotterSettings.penUpHeight,
-        penDownPosition: plotterSettings.penDownHeight,
+        penDownLight: plotterSettings.penDownLight,
+        penDownDark: plotterSettings.penDownDark,
+        invertPenLift: plotterSettings.invertPenLift,
       });
       await plotter.connect(conn);
       plotterRef.current = plotter;
@@ -595,27 +663,51 @@ const App = () => {
 
   const handleTestPenUp = useCallback(async () => {
     try {
-      await plotterRef.current?.testPenUp();
+      if (!plotterRef.current) return;
+      setStatus(`Testing pen UP (${plotterSettings.penUpHeight})...`);
+      await plotterRef.current.testPenHeight(plotterSettings.penUpHeight);
+      setStatus(`Pen moved to UP (${plotterSettings.penUpHeight})`);
     } catch (err) {
-      setStatus('Pen up failed');
+      console.error('Test failed:', err);
+      setStatus('Pen test failed');
     }
-  }, []);
+  }, [plotterSettings.penUpHeight]);
 
-  const handleTestPenDown = useCallback(async () => {
+  const handleTestPenLight = useCallback(async () => {
     try {
-      await plotterRef.current?.testPenDown();
+      if (!plotterRef.current) return;
+      setStatus(`Testing pen DOWN (light) (${plotterSettings.penDownLight})...`);
+      await plotterRef.current.testPenHeight(plotterSettings.penDownLight);
+      setStatus(`Pen moved to DOWN (light) (${plotterSettings.penDownLight})`);
     } catch (err) {
-      setStatus('Pen down failed');
+      console.error('Test failed:', err);
+      setStatus('Pen test failed');
     }
-  }, []);
+  }, [plotterSettings.penDownLight]);
 
-  const handleTestPenHeight = useCallback(async (height: number) => {
+  const handleTestPenDark = useCallback(async () => {
     try {
-      await plotterRef.current?.testPenHeight(height);
+      if (!plotterRef.current) return;
+      setStatus(`Testing pen DOWN (dark) (${plotterSettings.penDownDark})...`);
+      await plotterRef.current.testPenHeight(plotterSettings.penDownDark);
+      setStatus(`Pen moved to DOWN (dark) (${plotterSettings.penDownDark})`);
     } catch (err) {
-      setStatus('Pen height test failed');
+      console.error('Test failed:', err);
+      setStatus('Pen test failed');
     }
-  }, []);
+  }, [plotterSettings.penDownDark]);
+
+  const handleTestPattern = useCallback(async () => {
+    try {
+      await plotterRef.current?.drawTestPattern(
+        plotterSettings.penDownLight,
+        plotterSettings.penDownDark
+      );
+      setStatus('Test pattern complete');
+    } catch (err) {
+      setStatus('Test pattern failed');
+    }
+  }, [plotterSettings.penDownLight, plotterSettings.penDownDark]);
 
   // Update estimated time when maze or settings change
   useEffect(() => {
@@ -640,7 +732,9 @@ const App = () => {
         plotHeight: paper.height - 20,
         speed: plotterSettings.speed,
         penUpPosition: plotterSettings.penUpHeight,
-        penDownPosition: plotterSettings.penDownHeight,
+        penDownLight: plotterSettings.penDownLight,
+        penDownDark: plotterSettings.penDownDark,
+        invertPenLift: plotterSettings.invertPenLift,
       });
     }
   }, [plotterSettings]);
@@ -896,58 +990,104 @@ const App = () => {
                       className="w-full accent-emerald-500"
                     />
                   </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
-                        <span>Pen Up</span>
-                        <span>{plotterSettings.penUpHeight}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="40"
-                        max="100"
-                        step="5"
-                        value={plotterSettings.penUpHeight}
-                        onChange={(e) => setPlotterSettings({ ...plotterSettings, penUpHeight: parseInt(e.target.value) })}
-                        disabled={plotterStatus.state === 'plotting'}
-                        className="w-full accent-emerald-500"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
-                        <span>Pen Down</span>
-                        <span>{plotterSettings.penDownHeight}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0"
-                        max="60"
-                        step="5"
-                        value={plotterSettings.penDownHeight}
-                        onChange={(e) => setPlotterSettings({ ...plotterSettings, penDownHeight: parseInt(e.target.value) })}
-                        disabled={plotterStatus.state === 'plotting'}
-                        className="w-full accent-emerald-500"
-                      />
-                    </div>
+                  
+                  {/* Invert Pen Lift */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={plotterSettings.invertPenLift}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, invertPenLift: e.target.checked })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="rounded border-slate-700 bg-slate-900"
+                    />
+                    <span className="text-xs text-slate-400">Invert Pen Lift</span>
                   </div>
 
-                  {/* Test buttons */}
+                  {/* Pen Up Height */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase">Pen Up</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">{plotterSettings.penUpHeight}</span>
+                        <button
+                          onClick={handleTestPenUp}
+                          disabled={plotterStatus.state === 'plotting'}
+                          className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-300 rounded text-[10px] font-bold transition-all"
+                        >
+                          Test
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={plotterSettings.penUpHeight}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, penUpHeight: parseInt(e.target.value) })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-slate-400"
+                    />
+                  </div>
+
+                  {/* Pen Down Light (for bright areas) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-blue-400 font-bold uppercase">Down Light</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">{plotterSettings.penDownLight}</span>
+                        <button
+                          onClick={handleTestPenLight}
+                          disabled={plotterStatus.state === 'plotting'}
+                          className="px-2 py-0.5 bg-blue-900/50 hover:bg-blue-800/50 disabled:opacity-50 text-blue-300 rounded text-[10px] font-bold transition-all"
+                        >
+                          Test
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={plotterSettings.penDownLight}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, penDownLight: parseInt(e.target.value) })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-blue-400"
+                    />
+                    <div className="text-[9px] text-slate-600">Bright areas (thin lines)</div>
+                  </div>
+
+                  {/* Pen Down Dark (for dark areas) */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-red-400 font-bold uppercase">Down Dark</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-slate-400 font-mono">{plotterSettings.penDownDark}</span>
+                        <button
+                          onClick={handleTestPenDark}
+                          disabled={plotterStatus.state === 'plotting'}
+                          className="px-2 py-0.5 bg-red-900/50 hover:bg-red-800/50 disabled:opacity-50 text-red-300 rounded text-[10px] font-bold transition-all"
+                        >
+                          Test
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={plotterSettings.penDownDark}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, penDownDark: parseInt(e.target.value) })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-red-400"
+                    />
+                    <div className="text-[9px] text-slate-600">Dark areas (thick lines)</div>
+                  </div>
+
+                  {/* Utility buttons */}
                   <div className="flex gap-2">
-                    <button
-                      onClick={handleTestPenUp}
-                      disabled={plotterStatus.state === 'plotting'}
-                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
-                    >
-                      <ChevronUp size={12} /> Up
-                    </button>
-                    <button
-                      onClick={handleTestPenDown}
-                      disabled={plotterStatus.state === 'plotting'}
-                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
-                    >
-                      <ChevronDown size={12} /> Down
-                    </button>
                     <button
                       onClick={handlePlotterHome}
                       disabled={plotterStatus.state === 'plotting'}
@@ -955,32 +1095,13 @@ const App = () => {
                     >
                       <Home size={12} /> Home
                     </button>
-                  </div>
-
-                  {/* Test Pen Height Slider */}
-                  <div className="space-y-1 p-2 bg-slate-800/50 rounded-lg">
-                    <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
-                      <span>Test Stroke Height</span>
-                      <span>{testPenHeight}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="5"
-                      value={testPenHeight}
-                      onChange={(e) => {
-                        const height = parseInt(e.target.value);
-                        setTestPenHeight(height);
-                        handleTestPenHeight(height);
-                      }}
+                    <button
+                      onClick={handleTestPattern}
                       disabled={plotterStatus.state === 'plotting'}
-                      className="w-full accent-emerald-500"
-                    />
-                    <div className="flex justify-between text-[9px] text-slate-600">
-                      <span>Heavy (thick)</span>
-                      <span>Light (thin)</span>
-                    </div>
+                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                    >
+                      Test Pattern
+                    </button>
                   </div>
 
                   {/* Plot Progress */}
@@ -1103,6 +1224,15 @@ const App = () => {
               className="rounded border-slate-700 bg-slate-900"
             />
             <span className="text-xs text-slate-400">Include START/END in SVG</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={params.svgColorByWeight}
+              onChange={(e) => setParams({ ...params, svgColorByWeight: e.target.checked })}
+              className="rounded border-slate-700 bg-slate-900"
+            />
+            <span className="text-xs text-slate-400">Color-code by weight (laser)</span>
           </div>
         </div>
       </div>

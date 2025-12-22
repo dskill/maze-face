@@ -28,6 +28,9 @@ export interface PlotterConfig extends EBBConfig {
   plotWidth: number;       // mm - actual plot area width
   plotHeight: number;      // mm - actual plot area height
   speed: number;           // 1-100 scale
+  penDownLight: number;    // 0-100 pen height for lightest strokes
+  penDownDark: number;     // 0-100 pen height for darkest strokes
+  invertPenLift: boolean;  // Invert servo direction
 }
 
 export const DEFAULT_PLOTTER_CONFIG: PlotterConfig = {
@@ -39,6 +42,9 @@ export const DEFAULT_PLOTTER_CONFIG: PlotterConfig = {
   plotWidth: 132,    // 152 - 2*10
   plotHeight: 132,
   speed: 50,
+  penDownLight: 45,  // Lighter touch for bright areas
+  penDownDark: 25,   // Heavier pressure for dark areas
+  invertPenLift: false,
 };
 
 export type PlotterState = 'disconnected' | 'connected' | 'plotting' | 'paused';
@@ -82,6 +88,9 @@ export class Plotter {
     // Configure servo
     await this.ebb.configureServo();
     await this.ebb.enableMotors();
+    
+    // Lift pen to start
+    await this.ebb.penUp();
 
     this.state = 'connected';
     this.notifyStatus();
@@ -126,16 +135,17 @@ export class Plotter {
 
   /**
    * Convert stroke width (from maze) to pen height
-   * Thicker strokes = lower pen height = more pressure
+   * Interpolates between penDownLight and penDownDark based on stroke width
+   * Thicker strokes = closer to penDownDark (more pressure)
    */
   strokeToHeight(strokeWidth: number, minStroke = 0.5, maxStroke = 3): number {
     // Clamp stroke width
     const clamped = Math.max(minStroke, Math.min(maxStroke, strokeWidth));
-    // Normalize to 0-1 range
+    // Normalize to 0-1 range (0 = thinnest, 1 = thickest)
     const normalized = (clamped - minStroke) / (maxStroke - minStroke);
-    // Invert: thick strokes (high normalized) = low height (more pressure)
-    // Map to 20-60 range (leaving room at extremes)
-    return Math.round(60 - normalized * 40);
+    // Interpolate: thin strokes → penDownLight, thick strokes → penDownDark
+    const height = this.config.penDownLight - normalized * (this.config.penDownLight - this.config.penDownDark);
+    return Math.round(height);
   }
 
   /**
@@ -241,29 +251,70 @@ export class Plotter {
   }
 
   /**
-   * Test pen up
-   */
-  async testPenUp(): Promise<void> {
-    if (!this.ebb) throw new Error('Not connected');
-    await this.ebb.penUp();
-  }
-
-  /**
-   * Test pen down
-   */
-  async testPenDown(): Promise<void> {
-    if (!this.ebb) throw new Error('Not connected');
-    await this.ebb.penDown();
-  }
-
-  /**
    * Test pen at a specific height (0-100 scale)
-   * Use this to preview line thickness positions
-   * 0 = maximum pressure (thickest), 100 = no contact (thinnest)
+   * 0 = maximum pressure (lowest), 100 = highest (no contact)
    */
   async testPenHeight(height: number): Promise<void> {
     if (!this.ebb) throw new Error('Not connected');
     await this.ebb.setPenHeight(height);
+  }
+
+  /**
+   * Test pen up - moves to the configured pen up position
+   */
+  async testPenUp(): Promise<void> {
+    if (!this.ebb) throw new Error('Not connected');
+    await this.ebb.setPenHeight(this.config.penUpPosition);
+  }
+
+  /**
+   * Test pen down at a specific height (0-100 scale)
+   * 0 = maximum pressure (thickest), 100 = no contact (thinnest)
+   */
+  async testPenDown(height: number): Promise<void> {
+    if (!this.ebb) throw new Error('Not connected');
+    await this.ebb.setPenHeight(height);
+  }
+
+  /**
+   * Draw a test pattern with graduated line weights
+   * Draws 5 short horizontal lines interpolating from light to dark
+   */
+  async drawTestPattern(penDownLight: number, penDownDark: number): Promise<void> {
+    if (!this.ebb) throw new Error('Not connected');
+
+    // Pattern parameters (in mm, converted to steps)
+    const startX = 20 * STEPS_PER_MM;  // 20mm from left
+    const startY = 20 * STEPS_PER_MM;  // 20mm from top
+    const lineLength = 30 * STEPS_PER_MM;  // 30mm lines
+    const lineSpacing = 8 * STEPS_PER_MM;  // 8mm between lines
+
+    // 5 lines interpolating from light to dark
+    const steps = 5;
+
+    await this.ebb.penUp();
+
+    for (let i = 0; i < steps; i++) {
+      // Interpolate from light (i=0) to dark (i=steps-1)
+      const t = i / (steps - 1);
+      const height = Math.round(penDownLight - t * (penDownLight - penDownDark));
+      const y = startY + i * lineSpacing;
+
+      // Move to line start
+      await this.ebb.moveTo(startX, y);
+
+      // Set pen height and lower
+      await this.ebb.setPenHeight(height);
+
+      // Draw line
+      await this.ebb.moveTo(startX + lineLength, y);
+
+      // Lift pen
+      await this.ebb.penUp();
+    }
+
+    // Return home
+    await this.ebb.home();
   }
 
   /**

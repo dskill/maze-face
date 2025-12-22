@@ -1,38 +1,44 @@
 /**
  * EBB (EiBotBoard) command interface for AxiDraw
  * Reference: https://evil-mad.github.io/EggBot/ebb.html
+ *
+ * Key command mapping:
+ * - SC,4 = Servo_Min register, used by SP,1 (pen UP)
+ * - SC,5 = Servo_Max register, used by SP,0 (pen DOWN)
+ * - S2,pos,pin,rate = Direct servo positioning (bypasses SP state machine)
  */
 
 import { AxiDrawConnection, sendCommand } from './connection';
 
-// Servo position units are in 83.3ns increments
-// Typical range: 7500 (0.625ms) to 25000 (2.08ms)
-// Default pen up: ~16000 (SERVO_MIN + ~60%), pen down: ~12000 (SERVO_MIN + ~30%)
-const SERVO_MIN = 7500;   // Highest pen position
-const SERVO_MAX = 28000;  // Lowest pen position (most pressure)
+// Servo position units are in 1/12MHz increments (~83.3ns)
+// Standard RC servo range is ~1ms to ~2ms
+// 1ms = 12000 units
+// 2ms = 24000 units
+// Smaller values = shorter pulse
+// Larger values = longer pulse
+const SERVO_MIN = 12000;  // ~1ms pulse (Standard 'Up' for AxiDraw)
+const SERVO_MAX = 24000;  // ~2ms pulse (Standard 'Down' for AxiDraw)
+
+// Pen servo is on RB1 (pin 1) on AxiDraw
+const PEN_SERVO_PIN = 1;
 
 export interface EBBConfig {
   penUpPosition: number;    // 0-100 scale (100 = highest)
-  penDownPosition: number;  // 0-100 scale (0 = lowest/most pressure)
+  penDownLight: number;     // 0-100 scale for light strokes
+  penDownDark: number;      // 0-100 scale for dark strokes
   servoRate: number;        // Rate of pen movement (higher = faster)
   stepRate: number;         // Steps per second for movement
+  invertPenLift: boolean;   // Invert servo direction
 }
 
 export const DEFAULT_CONFIG: EBBConfig = {
-  penUpPosition: 60,
-  penDownPosition: 40,
+  penUpPosition: 70,
+  penDownLight: 45,
+  penDownDark: 25,
   servoRate: 150,
   stepRate: 1000,
+  invertPenLift: false,
 };
-
-/**
- * Convert 0-100 scale to servo position units
- */
-function scaleToServoPos(value: number): number {
-  // Invert: 100 = SERVO_MIN (high), 0 = SERVO_MAX (low)
-  const clamped = Math.max(0, Math.min(100, value));
-  return Math.round(SERVO_MIN + (100 - clamped) / 100 * (SERVO_MAX - SERVO_MIN));
-}
 
 /**
  * EBB command builder and executor
@@ -41,12 +47,58 @@ export class EBB {
   private conn: AxiDrawConnection;
   private config: EBBConfig;
   private currentPenUp: boolean = true;
+  private currentPenHeight: number = 70;
   private currentX: number = 0;
   private currentY: number = 0;
 
   constructor(conn: AxiDrawConnection, config: Partial<EBBConfig> = {}) {
     this.conn = conn;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.currentPenHeight = this.config.penUpPosition;
+  }
+
+  /**
+   * Convert 0-100 scale to servo position units
+   */
+  private getServoPos(height: number): number {
+    const clamped = Math.max(0, Math.min(100, height));
+    
+    // Default: High height (100) -> SERVO_MIN (12000)
+    //          Low height (0)   -> SERVO_MAX (24000)
+    
+    if (this.config.invertPenLift) {
+      // Inverted: High height (100) -> SERVO_MAX (24000)
+      return Math.round(SERVO_MIN + (clamped / 100) * (SERVO_MAX - SERVO_MIN));
+    } else {
+      // Standard: High height (100) -> SERVO_MIN (12000)
+      return Math.round(SERVO_MIN + (100 - clamped) / 100 * (SERVO_MAX - SERVO_MIN));
+    }
+  }
+
+  /**
+   * Set the pen height using SC + SP, which is widely supported/reliable.
+   * This works by updating the target register and then commanding the pen state machine.
+   */
+  private async setPenHeightViaSP(height: number, duration = 500): Promise<void> {
+    const pos = this.getServoPos(height);
+
+    // Treat any height >= configured up position as "up"
+    const isUp = height >= this.config.penUpPosition;
+
+    if (isUp) {
+      // SC,4 = Servo_Min; SP,1 moves to Servo_Min
+      await sendCommand(this.conn, `SC,4,${pos}`);
+      await sendCommand(this.conn, `SP,1,${duration}`);
+      this.currentPenUp = true;
+    } else {
+      // SC,5 = Servo_Max; SP,0 moves to Servo_Max
+      await sendCommand(this.conn, `SC,5,${pos}`);
+      await sendCommand(this.conn, `SP,0,${duration}`);
+      this.currentPenUp = false;
+    }
+
+    this.currentPenHeight = height;
+    await this.delay(duration);
   }
 
   /**
@@ -67,7 +119,6 @@ export class EBB {
    * Enable motors
    */
   async enableMotors(): Promise<void> {
-    // EM,1,1 enables both motors at 1/16 microstepping
     await sendCommand(this.conn, 'EM,1,1');
   }
 
@@ -79,61 +130,76 @@ export class EBB {
   }
 
   /**
-   * Configure servo positions
+   * Configure servo positions for SP commands
+   * SC,4 = Servo_Min = pen UP position (used by SP,1)
+   * SC,5 = Servo_Max = pen DOWN position (used by SP,0)
    */
   async configureServo(): Promise<void> {
-    const upPos = scaleToServoPos(this.config.penUpPosition);
-    const downPos = scaleToServoPos(this.config.penDownPosition);
+    const upPos = this.getServoPos(this.config.penUpPosition);
+    const downPos = this.getServoPos(this.config.penDownLight);
 
-    // SC,5,value - set pen UP position
-    await sendCommand(this.conn, `SC,5,${upPos}`);
-    // SC,4,value - set pen DOWN position
-    await sendCommand(this.conn, `SC,4,${downPos}`);
-    // SC,10,rate - set servo rate
+    // SC,4 = Servo_Min = pen UP (SP,1 goes here)
+    await sendCommand(this.conn, `SC,4,${upPos}`);
+    // SC,5 = Servo_Max = pen DOWN (SP,0 goes here)
+    await sendCommand(this.conn, `SC,5,${downPos}`);
+    // SC,10 = servo rate
     await sendCommand(this.conn, `SC,10,${this.config.servoRate}`);
   }
 
   /**
-   * Raise the pen
+   * Move servo to absolute position using S2 command
+   * This bypasses the SP state machine and reliably positions the servo
+   * @param height 0-100 scale (100 = highest, 0 = most pressure)
+   * @param duration Movement duration in ms
+   */
+  async setServoPosition(height: number, duration = 500): Promise<void> {
+    const pos = this.getServoPos(height);
+    // S2,position,pin,rate - rate controls movement speed
+    // Rate is change per 24ms period. Calculate for smooth movement over duration.
+    const currentPos = this.getServoPos(this.currentPenHeight);
+    const delta = Math.abs(pos - currentPos);
+    const periods = Math.max(1, duration / 24);
+    const rate = Math.max(1, Math.ceil(delta / periods));
+
+    await sendCommand(this.conn, `S2,${pos},${PEN_SERVO_PIN},${rate}`);
+    this.currentPenHeight = height;
+    this.currentPenUp = height >= 50; // Rough heuristic
+    await this.delay(duration);
+  }
+
+  /**
+   * Raise the pen to the configured up position
    */
   async penUp(duration = 300): Promise<void> {
-    if (this.currentPenUp) return;
-    await sendCommand(this.conn, `SP,1,${duration}`);
-    this.currentPenUp = true;
-    // Wait for pen to raise
-    await this.delay(duration);
+    await this.setPenHeightViaSP(this.config.penUpPosition, duration);
   }
 
   /**
-   * Lower the pen
+   * Lower the pen to the current down position
    */
   async penDown(duration = 300): Promise<void> {
-    if (!this.currentPenUp) return;
-    await sendCommand(this.conn, `SP,0,${duration}`);
-    this.currentPenUp = false;
-    // Wait for pen to lower
-    await this.delay(duration);
+    await this.setPenHeightViaSP(this.config.penDownLight, duration);
   }
 
   /**
-   * Set pen height directly (0-100 scale)
-   * 0 = maximum pressure (lowest), 100 = highest (no contact)
+   * Set pen height directly using S2 (for testing/calibration)
+   * This reliably moves to an absolute position
    */
   async setPenHeight(height: number): Promise<void> {
-    const pos = scaleToServoPos(height);
-    // S2 command for direct servo control
-    // S2,position,pin - pin 0 is the pen servo
-    await sendCommand(this.conn, `S2,${pos},0`);
+    // Use SC+SP path by default; this makes the UI "Test" buttons reliable.
+    await this.setPenHeightViaSP(height, 500);
   }
 
   /**
-   * Set pen down height for variable thickness
-   * This adjusts where "down" is for the next penDown command
+   * Set pen down height for variable thickness during plotting
+   * Updates SC,5 (Servo_Max) for next SP,0 command
    */
   async setPenDownHeight(height: number): Promise<void> {
-    const pos = scaleToServoPos(height);
-    await sendCommand(this.conn, `SC,4,${pos}`);
-    this.config.penDownPosition = height;
+    // Maintain legacy helper: update SC,5 only (no motion) for code that wants to
+    // issue SP,0 later. (Most callers should use setPenHeight instead.)
+    const pos = this.getServoPos(height);
+    await sendCommand(this.conn, `SC,5,${pos}`);
+    this.currentPenHeight = height;
   }
 
   /**
@@ -150,19 +216,16 @@ export class EBB {
     const stepsA = Math.round(dx + dy);
     const stepsB = Math.round(dx - dy);
 
-    // Calculate duration based on distance if not specified
     if (duration === undefined) {
       const distance = Math.sqrt(dx * dx + dy * dy);
       duration = Math.max(1, Math.round(distance / this.config.stepRate * 1000));
     }
 
-    // SM command: SM,duration,axisA,axisB
     await sendCommand(this.conn, `SM,${duration},${stepsA},${stepsB}`);
 
     this.currentX = x;
     this.currentY = y;
 
-    // Wait for movement
     await this.delay(duration);
   }
 
@@ -176,6 +239,8 @@ export class EBB {
     targetHeight: number,
     duration?: number
   ): Promise<void> {
+    // Simpler + reliable behavior: set pen height first, then move.
+    // This makes per-segment pen height (and the test buttons) behave predictably.
     const dx = x - this.currentX;
     const dy = y - this.currentY;
 
@@ -184,52 +249,20 @@ export class EBB {
       return;
     }
 
-    // CoreXY kinematics
-    const stepsA = Math.round(dx + dy);
-    const stepsB = Math.round(dx - dy);
-
-    // Calculate duration based on distance if not specified
-    if (duration === undefined) {
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      duration = Math.max(1, Math.round(distance / this.config.stepRate * 1000));
+    if (this.currentPenHeight !== targetHeight) {
+      await this.setPenHeight(targetHeight);
+    } else if (this.currentPenUp) {
+      // If we're "up" but asked to draw, re-assert down at the current height.
+      await this.setPenHeight(targetHeight);
     }
 
-    const targetPos = scaleToServoPos(targetHeight);
-
-    // Calculate servo rate needed to reach target in the same duration
-    // Rate is in units per 24ms interval
-    const intervals = duration / 24;
-    const currentPos = scaleToServoPos(this.config.penDownPosition);
-    const posDelta = Math.abs(targetPos - currentPos);
-    const rate = Math.max(1, Math.round(posDelta / intervals));
-
-    // Set servo rate for synchronized movement
-    await sendCommand(this.conn, `SC,10,${rate}`);
-    // Set target pen position
-    await sendCommand(this.conn, `SC,4,${targetPos}`);
-    // Lower pen to new position if needed
-    if (this.currentPenUp) {
-      await sendCommand(this.conn, 'SP,0');
-      this.currentPenUp = false;
-    }
-    // Execute XY movement
-    await sendCommand(this.conn, `SM,${duration},${stepsA},${stepsB}`);
-
-    this.currentX = x;
-    this.currentY = y;
-    this.config.penDownPosition = targetHeight;
-
-    await this.delay(duration);
+    await this.moveTo(x, y, duration);
   }
 
   /**
    * Draw a line from current position to target with specified thickness
-   * @param x Target X in steps
-   * @param y Target Y in steps
-   * @param thickness 0-100 where 0 = thickest (most pressure), 100 = thinnest
    */
   async lineTo(x: number, y: number, thickness: number = 50): Promise<void> {
-    // Ensure pen is down at correct height
     await this.moveWithHeight(x, y, thickness);
   }
 
