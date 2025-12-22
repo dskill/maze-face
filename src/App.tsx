@@ -35,14 +35,14 @@ interface MazeData {
 const App = () => {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [params, setParams] = useState({
-    densityBias: 1.2,
-    contrast: 1.5,
-    minCellSize: 4,
-    edgeFocus: 1.0,
+    densityBias: 0.2,
+    contrast: 1.9,
+    minCellSize: 8,
+    edgeFocus: 2.7,
     invert: false,
-    wallThickness: 1.2,
+    wallThickness: 1.0,
     svgIncludeLabels: false,
-    shadingIntensity: 2.0,
+    shadingIntensity: 1.8,
     showSolution: false,
     showImage: false,
     resolution: 800
@@ -65,6 +65,7 @@ const App = () => {
     penDownHeight: 40,
   });
   const [estimatedTime, setEstimatedTime] = useState<string | null>(null);
+  const [testPenHeight, setTestPenHeight] = useState(50);
   const plotterRef = useRef<Plotter | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -607,6 +608,14 @@ const App = () => {
     }
   }, []);
 
+  const handleTestPenHeight = useCallback(async (height: number) => {
+    try {
+      await plotterRef.current?.testPenHeight(height);
+    } catch (err) {
+      setStatus('Pen height test failed');
+    }
+  }, []);
+
   // Update estimated time when maze or settings change
   useEffect(() => {
     if (mazeData.current.nodes.length > 0 && plotterRef.current) {
@@ -944,6 +953,32 @@ const App = () => {
                     >
                       <Home size={12} /> Home
                     </button>
+                  </div>
+
+                  {/* Test Pen Height Slider */}
+                  <div className="space-y-1 p-2 bg-slate-800/50 rounded-lg">
+                    <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                      <span>Test Stroke Height</span>
+                      <span>{testPenHeight}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={testPenHeight}
+                      onChange={(e) => {
+                        const height = parseInt(e.target.value);
+                        setTestPenHeight(height);
+                        handleTestPenHeight(height);
+                      }}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-emerald-500"
+                    />
+                    <div className="flex justify-between text-[9px] text-slate-600">
+                      <span>Heavy (thick)</span>
+                      <span>Light (thin)</span>
+                    </div>
                   </div>
 
                   {/* Plot Progress */}

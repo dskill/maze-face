@@ -257,6 +257,16 @@ export class Plotter {
   }
 
   /**
+   * Test pen at a specific height (0-100 scale)
+   * Use this to preview line thickness positions
+   * 0 = maximum pressure (thickest), 100 = no contact (thinnest)
+   */
+  async testPenHeight(height: number): Promise<void> {
+    if (!this.ebb) throw new Error('Not connected');
+    await this.ebb.setPenHeight(height);
+  }
+
+  /**
    * Move to home position
    */
   async goHome(): Promise<void> {
