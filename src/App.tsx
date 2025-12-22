@@ -1,5 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize, Plug, Unplug, Square, Pause, Home, ChevronUp, ChevronDown } from 'lucide-react';
+import {
+  connectAxiDraw,
+  isWebSerialSupported,
+  Plotter,
+  PlotterStatus,
+  PAPER_SIZES,
+  generatePlotJob,
+  estimatePlotTime,
+  formatTime,
+} from './axidraw';
 
 interface MazeNode {
   id: number;
@@ -38,6 +48,23 @@ const App = () => {
   });
   const [status, setStatus] = useState('Waiting for image...');
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // Plotter state
+  const [plotterSupported] = useState(isWebSerialSupported());
+  const [plotterStatus, setPlotterStatus] = useState<PlotterStatus>({
+    state: 'disconnected',
+    progress: 0,
+    currentSegment: 0,
+    totalSegments: 0,
+  });
+  const [plotterSettings, setPlotterSettings] = useState({
+    paperSize: '6x6' as keyof typeof PAPER_SIZES,
+    speed: 50,
+    penUpHeight: 60,
+    penDownHeight: 40,
+  });
+  const [estimatedTime, setEstimatedTime] = useState<string | null>(null);
+  const plotterRef = useRef<Plotter | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -295,7 +322,7 @@ const App = () => {
 
     ctx.strokeStyle = 'black';
     ctx.lineCap = 'square';
-    ctx.font = 'bold 14px Courier, monospace';
+    ctx.font = 'bold 14px Arial, Helvetica, sans-serif';
     ctx.textAlign = 'center';
 
     nodes.forEach((node) => {
@@ -347,12 +374,39 @@ const App = () => {
 
     ctx.fillStyle = 'black';
     if (startNode) {
+      const startCenterX = startNode.x + startNode.w / 2;
+      // START label with more padding
       ctx.textBaseline = 'bottom';
-      ctx.fillText('START', startNode.x + startNode.w / 2, startNode.y - 5);
+      ctx.fillText('START', startCenterX, startNode.y - 20);
+      // Down arrow pointing into the maze
+      ctx.beginPath();
+      ctx.moveTo(startCenterX, startNode.y - 15);
+      ctx.lineTo(startCenterX, startNode.y - 3);
+      ctx.stroke();
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(startCenterX - 4, startNode.y - 8);
+      ctx.lineTo(startCenterX, startNode.y - 3);
+      ctx.lineTo(startCenterX + 4, startNode.y - 8);
+      ctx.stroke();
     }
     if (endNode) {
+      const endCenterX = endNode.x + endNode.w / 2;
+      const endBottom = endNode.y + endNode.h;
+      // Down arrow coming out of the maze
+      ctx.beginPath();
+      ctx.moveTo(endCenterX, endBottom + 3);
+      ctx.lineTo(endCenterX, endBottom + 15);
+      ctx.stroke();
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(endCenterX - 4, endBottom + 10);
+      ctx.lineTo(endCenterX, endBottom + 15);
+      ctx.lineTo(endCenterX + 4, endBottom + 10);
+      ctx.stroke();
+      // END label with more padding
       ctx.textBaseline = 'top';
-      ctx.fillText('END', endNode.x + endNode.w / 2, endNode.y + endNode.h + 5);
+      ctx.fillText('END', endCenterX, endBottom + 20);
     }
 
     if (params.showSolution && mazeData.current.solution.length > 0) {
@@ -423,11 +477,23 @@ const App = () => {
       });
     });
 
-    let labels = `<text x="${startNode!.x + startNode!.w / 2}" y="${startNode!.y - 5}" font-family="Courier, monospace" font-size="14" font-weight="bold" fill="black" text-anchor="middle">START</text>`;
-    labels += `<text x="${endNode!.x + endNode!.w / 2}" y="${endNode!.y + endNode!.h + 15}" font-family="Courier, monospace" font-size="14" font-weight="bold" fill="black" text-anchor="middle">END</text>`;
+    const startCenterX = startNode!.x + startNode!.w / 2;
+    const endCenterX = endNode!.x + endNode!.w / 2;
+    const endBottom = endNode!.y + endNode!.h;
+
+    // START label and arrow
+    let labels = `<text x="${startCenterX}" y="${startNode!.y - 22}" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="bold" fill="black" text-anchor="middle">START</text>`;
+    // Down arrow pointing into maze
+    labels += `<path d="M ${startCenterX} ${startNode!.y - 15} L ${startCenterX} ${startNode!.y - 3}" stroke="black" stroke-width="1.5" fill="none" />`;
+    labels += `<path d="M ${startCenterX - 4} ${startNode!.y - 8} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 4} ${startNode!.y - 8}" stroke="black" stroke-width="1.5" fill="none" />`;
+
+    // END arrow and label
+    labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 15}" stroke="black" stroke-width="1.5" fill="none" />`;
+    labels += `<path d="M ${endCenterX - 4} ${endBottom + 10} L ${endCenterX} ${endBottom + 15} L ${endCenterX + 4} ${endBottom + 10}" stroke="black" stroke-width="1.5" fill="none" />`;
+    labels += `<text x="${endCenterX}" y="${endBottom + 32}" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="bold" fill="black" text-anchor="middle">END</text>`;
 
     const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg width="${width}" height="${height}" viewBox="0 -20 ${width} ${height + 40}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${width}" height="${height}" viewBox="0 -40 ${width} ${height + 80}" xmlns="http://www.w3.org/2000/svg">
   <rect x="0" y="0" width="${width}" height="${height}" fill="white" />
   <g id="maze_walls">${svgPaths}</g>
   <g id="labels">${labels}</g>
@@ -441,6 +507,131 @@ const App = () => {
     link.click();
     URL.revokeObjectURL(url);
   };
+
+  // Plotter functions
+  const handlePlotterConnect = useCallback(async () => {
+    try {
+      const conn = await connectAxiDraw();
+      const paper = PAPER_SIZES[plotterSettings.paperSize];
+      const plotter = new Plotter({
+        paperWidth: paper.width,
+        paperHeight: paper.height,
+        plotWidth: paper.width - 20,
+        plotHeight: paper.height - 20,
+        marginX: 10,
+        marginY: 10,
+        speed: plotterSettings.speed,
+        penUpPosition: plotterSettings.penUpHeight,
+        penDownPosition: plotterSettings.penDownHeight,
+      });
+      await plotter.connect(conn);
+      plotterRef.current = plotter;
+      setPlotterStatus(plotter.getStatus());
+      setStatus('AxiDraw connected');
+    } catch (err) {
+      console.error('Connection failed:', err);
+      setStatus(`Connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, [plotterSettings]);
+
+  const handlePlotterDisconnect = useCallback(async () => {
+    if (plotterRef.current) {
+      await plotterRef.current.disconnect();
+      plotterRef.current = null;
+      setPlotterStatus({ state: 'disconnected', progress: 0, currentSegment: 0, totalSegments: 0 });
+      setStatus('AxiDraw disconnected');
+    }
+  }, []);
+
+  const handlePlot = useCallback(async () => {
+    const plotter = plotterRef.current;
+    if (!plotter || mazeData.current.nodes.length === 0) return;
+
+    try {
+      const segments = generatePlotJob(mazeData.current, plotter, {
+        wallThickness: params.wallThickness,
+        shadingIntensity: params.shadingIntensity,
+      });
+
+      setStatus(`Plotting ${segments.length} segments...`);
+      await plotter.plot(segments, (status) => {
+        setPlotterStatus(status);
+      });
+      setStatus('Plot complete!');
+    } catch (err) {
+      console.error('Plot failed:', err);
+      setStatus(`Plot failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  }, [params.wallThickness, params.shadingIntensity]);
+
+  const handlePlotterPause = useCallback(() => {
+    plotterRef.current?.pause();
+    setPlotterStatus(plotterRef.current?.getStatus() || plotterStatus);
+  }, [plotterStatus]);
+
+  const handlePlotterResume = useCallback(() => {
+    plotterRef.current?.resume();
+    setPlotterStatus(plotterRef.current?.getStatus() || plotterStatus);
+  }, [plotterStatus]);
+
+  const handlePlotterStop = useCallback(() => {
+    plotterRef.current?.stop();
+    setPlotterStatus(plotterRef.current?.getStatus() || plotterStatus);
+    setStatus('Plot stopped');
+  }, [plotterStatus]);
+
+  const handlePlotterHome = useCallback(async () => {
+    try {
+      await plotterRef.current?.goHome();
+      setStatus('Returned to home');
+    } catch (err) {
+      setStatus('Home failed');
+    }
+  }, []);
+
+  const handleTestPenUp = useCallback(async () => {
+    try {
+      await plotterRef.current?.testPenUp();
+    } catch (err) {
+      setStatus('Pen up failed');
+    }
+  }, []);
+
+  const handleTestPenDown = useCallback(async () => {
+    try {
+      await plotterRef.current?.testPenDown();
+    } catch (err) {
+      setStatus('Pen down failed');
+    }
+  }, []);
+
+  // Update estimated time when maze or settings change
+  useEffect(() => {
+    if (mazeData.current.nodes.length > 0 && plotterRef.current) {
+      const segments = generatePlotJob(mazeData.current, plotterRef.current, {
+        wallThickness: params.wallThickness,
+        shadingIntensity: params.shadingIntensity,
+      });
+      const time = estimatePlotTime(segments, plotterSettings.speed);
+      setEstimatedTime(formatTime(time));
+    }
+  }, [params.wallThickness, params.shadingIntensity, plotterSettings.speed, plotterStatus.state]);
+
+  // Update plotter config when settings change
+  useEffect(() => {
+    if (plotterRef.current) {
+      const paper = PAPER_SIZES[plotterSettings.paperSize];
+      plotterRef.current.setConfig({
+        paperWidth: paper.width,
+        paperHeight: paper.height,
+        plotWidth: paper.width - 20,
+        plotHeight: paper.height - 20,
+        speed: plotterSettings.speed,
+        penUpPosition: plotterSettings.penUpHeight,
+        penDownPosition: plotterSettings.penDownHeight,
+      });
+    }
+  }, [plotterSettings]);
 
   useEffect(() => {
     render();
@@ -632,6 +823,217 @@ const App = () => {
               <span className="text-xs text-slate-300 font-bold">Ghost Original</span>
             </div>
           </div>
+
+          {/* AxiDraw Plotter Panel */}
+          {plotterSupported && (
+            <div className="space-y-4 p-4 bg-gradient-to-br from-emerald-900/20 to-blue-900/20 rounded-xl border border-emerald-500/20">
+              <label className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase">
+                <PenTool size={14} /> 5. AxiDraw Plotter
+              </label>
+
+              {/* Connection Status & Button */}
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${
+                  plotterStatus.state === 'disconnected' ? 'bg-slate-500' :
+                  plotterStatus.state === 'connected' ? 'bg-emerald-500' :
+                  plotterStatus.state === 'plotting' ? 'bg-blue-500 animate-pulse' :
+                  'bg-yellow-500'
+                }`} />
+                <span className="text-xs text-slate-400 capitalize flex-1">{plotterStatus.state}</span>
+                {plotterStatus.state === 'disconnected' ? (
+                  <button
+                    onClick={handlePlotterConnect}
+                    className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-all"
+                  >
+                    <Plug size={12} /> Connect
+                  </button>
+                ) : (
+                  <button
+                    onClick={handlePlotterDisconnect}
+                    disabled={plotterStatus.state === 'plotting'}
+                    className="py-1.5 px-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition-all"
+                  >
+                    <Unplug size={12} /> Disconnect
+                  </button>
+                )}
+              </div>
+
+              {/* Plotter Settings (only shown when connected) */}
+              {plotterStatus.state !== 'disconnected' && (
+                <>
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                      <span>Paper Size</span>
+                    </div>
+                    <select
+                      value={plotterSettings.paperSize}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, paperSize: e.target.value as keyof typeof PAPER_SIZES })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full bg-slate-900 border border-slate-700 rounded p-1.5 text-xs text-slate-200 focus:outline-none disabled:opacity-50"
+                    >
+                      {Object.keys(PAPER_SIZES).map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                      <span>Speed</span>
+                      <span>{plotterSettings.speed}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      step="5"
+                      value={plotterSettings.speed}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, speed: parseInt(e.target.value) })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                        <span>Pen Up</span>
+                        <span>{plotterSettings.penUpHeight}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="40"
+                        max="100"
+                        step="5"
+                        value={plotterSettings.penUpHeight}
+                        onChange={(e) => setPlotterSettings({ ...plotterSettings, penUpHeight: parseInt(e.target.value) })}
+                        disabled={plotterStatus.state === 'plotting'}
+                        className="w-full accent-emerald-500"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                        <span>Pen Down</span>
+                        <span>{plotterSettings.penDownHeight}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="60"
+                        step="5"
+                        value={plotterSettings.penDownHeight}
+                        onChange={(e) => setPlotterSettings({ ...plotterSettings, penDownHeight: parseInt(e.target.value) })}
+                        disabled={plotterStatus.state === 'plotting'}
+                        className="w-full accent-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Test buttons */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleTestPenUp}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <ChevronUp size={12} /> Up
+                    </button>
+                    <button
+                      onClick={handleTestPenDown}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <ChevronDown size={12} /> Down
+                    </button>
+                    <button
+                      onClick={handlePlotterHome}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <Home size={12} /> Home
+                    </button>
+                  </div>
+
+                  {/* Plot Progress */}
+                  {plotterStatus.state === 'plotting' && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>Progress</span>
+                        <span>{plotterStatus.currentSegment} / {plotterStatus.totalSegments}</span>
+                      </div>
+                      <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-500 to-blue-500 transition-all duration-300"
+                          style={{ width: `${plotterStatus.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Estimated time */}
+                  {estimatedTime && plotterStatus.state === 'connected' && mazeData.current.nodes.length > 0 && (
+                    <div className="text-[10px] text-slate-500 text-center">
+                      Estimated time: <span className="text-emerald-400 font-bold">{estimatedTime}</span>
+                    </div>
+                  )}
+
+                  {/* Plot / Pause / Stop buttons */}
+                  <div className="flex gap-2">
+                    {plotterStatus.state === 'connected' && (
+                      <button
+                        onClick={handlePlot}
+                        disabled={mazeData.current.nodes.length === 0}
+                        className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs"
+                      >
+                        <Play size={14} /> Plot
+                      </button>
+                    )}
+                    {plotterStatus.state === 'plotting' && (
+                      <>
+                        <button
+                          onClick={handlePlotterPause}
+                          className="flex-1 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs"
+                        >
+                          <Pause size={14} /> Pause
+                        </button>
+                        <button
+                          onClick={handlePlotterStop}
+                          className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs"
+                        >
+                          <Square size={14} /> Stop
+                        </button>
+                      </>
+                    )}
+                    {plotterStatus.state === 'paused' && (
+                      <>
+                        <button
+                          onClick={handlePlotterResume}
+                          className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs"
+                        >
+                          <Play size={14} /> Resume
+                        </button>
+                        <button
+                          onClick={handlePlotterStop}
+                          className="flex-1 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold flex items-center justify-center gap-2 transition-all text-xs"
+                        >
+                          <Square size={14} /> Stop
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* WebSerial not supported warning */}
+          {!plotterSupported && (
+            <div className="p-3 bg-yellow-900/20 border border-yellow-500/20 rounded-xl">
+              <p className="text-xs text-yellow-400">
+                AxiDraw integration requires Chrome or Edge browser.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="mt-auto space-y-2 pb-4">
