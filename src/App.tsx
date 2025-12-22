@@ -37,7 +37,7 @@ const App = () => {
   const [params, setParams] = useState({
     densityBias: 0.2,
     contrast: 1.9,
-    minCellSize: 8,
+    detailLevel: 5,  // 1-8, maps to subdivision depth
     edgeFocus: 2.7,
     invert: false,
     wallThickness: 1.0,
@@ -135,6 +135,12 @@ const App = () => {
 
       const nodes: MazeNode[] = [];
 
+      // Convert detailLevel (1-8) to minCellSize
+      // Level 1 = coarse (large cells), Level 8 = fine (tiny cells)
+      // At base 800px: level 1 = 100px, level 8 = ~3px
+      const maxDim = Math.max(mazeWidth, mazeHeight);
+      const minCellSize = maxDim / Math.pow(2, params.detailLevel + 2);
+
       const offC = document.createElement('canvas');
       offC.width = offC.height = 256;
       const offCtx = offC.getContext('2d')!;
@@ -158,17 +164,35 @@ const App = () => {
         const bBR = params.contrast * (rawBR - 128) + 128;
 
         const edgeStrength = Math.abs(bTL - bBR);
-        const toneThreshold = ((params.invert ? 255 - bMid : bMid) / 255) * 45 * params.densityBias;
-        const finalThreshold = toneThreshold - (edgeStrength / 255) * 30 * params.edgeFocus;
+        // Scale thresholds relative to resolution for consistency
+        const baseResolution = 800;
+        const resScale = maxDim / baseResolution;
+        const toneThreshold = ((params.invert ? 255 - bMid : bMid) / 255) * 45 * params.densityBias * resScale;
+        const finalThreshold = toneThreshold - (edgeStrength / 255) * 30 * params.edgeFocus * resScale;
 
         const cellSize = Math.min(w, h);
-        if (cellSize > params.minCellSize && cellSize > finalThreshold) {
-          const hw = w / 2;
-          const hh = h / 2;
-          subdivide(x, y, hw, hh);
-          subdivide(x + hw, y, hw, hh);
-          subdivide(x, y + hh, hw, hh);
-          subdivide(x + hw, y + hh, hw, hh);
+        if (cellSize > minCellSize && cellSize > finalThreshold) {
+          // Subdivide to keep cells roughly square
+          const aspectRatio = w / h;
+          if (aspectRatio > 1.5) {
+            // Too wide - split horizontally only
+            const hw = w / 2;
+            subdivide(x, y, hw, h);
+            subdivide(x + hw, y, hw, h);
+          } else if (aspectRatio < 0.67) {
+            // Too tall - split vertically only
+            const hh = h / 2;
+            subdivide(x, y, w, hh);
+            subdivide(x, y + hh, w, hh);
+          } else {
+            // Roughly square - split into 4 quadrants
+            const hw = w / 2;
+            const hh = h / 2;
+            subdivide(x, y, hw, hh);
+            subdivide(x + hw, y, hw, hh);
+            subdivide(x, y + hh, hw, hh);
+            subdivide(x + hw, y + hh, hw, hh);
+          }
         } else {
           nodes.push({
             id: nodes.length,
@@ -919,19 +943,23 @@ const App = () => {
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
                 <span className="flex items-center gap-1">
-                  <Layers size={10} /> Min Cell Size
+                  <Layers size={10} /> Detail Level
                 </span>
-                <span>{params.minCellSize}px</span>
+                <span>{params.detailLevel}</span>
               </div>
               <input
                 type="range"
-                min="2"
-                max="16"
+                min="1"
+                max="8"
                 step="1"
-                value={params.minCellSize}
-                onChange={(e) => setParams({ ...params, minCellSize: parseInt(e.target.value) })}
+                value={params.detailLevel}
+                onChange={(e) => setParams({ ...params, detailLevel: parseInt(e.target.value) })}
                 className="w-full accent-blue-500"
               />
+              <div className="flex justify-between text-[9px] text-slate-600">
+                <span>Coarse</span>
+                <span>Fine</span>
+              </div>
             </div>
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
