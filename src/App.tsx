@@ -322,7 +322,7 @@ const App = () => {
 
     ctx.strokeStyle = 'black';
     ctx.lineCap = 'square';
-    ctx.font = 'bold 14px Arial, Helvetica, sans-serif';
+    ctx.font = '12px Arial, Helvetica, sans-serif';
     ctx.textAlign = 'center';
 
     nodes.forEach((node) => {
@@ -373,21 +373,22 @@ const App = () => {
     });
 
     ctx.fillStyle = 'black';
+    ctx.lineWidth = 0.75;
     if (startNode) {
       const startCenterX = startNode.x + startNode.w / 2;
       // START label with more padding
       ctx.textBaseline = 'bottom';
-      ctx.fillText('START', startCenterX, startNode.y - 20);
+      ctx.fillText('START', startCenterX, startNode.y - 18);
       // Down arrow pointing into the maze
       ctx.beginPath();
-      ctx.moveTo(startCenterX, startNode.y - 15);
+      ctx.moveTo(startCenterX, startNode.y - 14);
       ctx.lineTo(startCenterX, startNode.y - 3);
       ctx.stroke();
       // Arrowhead
       ctx.beginPath();
-      ctx.moveTo(startCenterX - 4, startNode.y - 8);
+      ctx.moveTo(startCenterX - 3, startNode.y - 7);
       ctx.lineTo(startCenterX, startNode.y - 3);
-      ctx.lineTo(startCenterX + 4, startNode.y - 8);
+      ctx.lineTo(startCenterX + 3, startNode.y - 7);
       ctx.stroke();
     }
     if (endNode) {
@@ -396,17 +397,17 @@ const App = () => {
       // Down arrow coming out of the maze
       ctx.beginPath();
       ctx.moveTo(endCenterX, endBottom + 3);
-      ctx.lineTo(endCenterX, endBottom + 15);
+      ctx.lineTo(endCenterX, endBottom + 14);
       ctx.stroke();
       // Arrowhead
       ctx.beginPath();
-      ctx.moveTo(endCenterX - 4, endBottom + 10);
-      ctx.lineTo(endCenterX, endBottom + 15);
-      ctx.lineTo(endCenterX + 4, endBottom + 10);
+      ctx.moveTo(endCenterX - 3, endBottom + 10);
+      ctx.lineTo(endCenterX, endBottom + 14);
+      ctx.lineTo(endCenterX + 3, endBottom + 10);
       ctx.stroke();
       // END label with more padding
       ctx.textBaseline = 'top';
-      ctx.fillText('END', endCenterX, endBottom + 20);
+      ctx.fillText('END', endCenterX, endBottom + 18);
     }
 
     if (params.showSolution && mazeData.current.solution.length > 0) {
@@ -482,15 +483,15 @@ const App = () => {
     const endBottom = endNode!.y + endNode!.h;
 
     // START label and arrow
-    let labels = `<text x="${startCenterX}" y="${startNode!.y - 22}" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="bold" fill="black" text-anchor="middle">START</text>`;
+    let labels = `<text x="${startCenterX}" y="${startNode!.y - 20}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">START</text>`;
     // Down arrow pointing into maze
-    labels += `<path d="M ${startCenterX} ${startNode!.y - 15} L ${startCenterX} ${startNode!.y - 3}" stroke="black" stroke-width="1.5" fill="none" />`;
-    labels += `<path d="M ${startCenterX - 4} ${startNode!.y - 8} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 4} ${startNode!.y - 8}" stroke="black" stroke-width="1.5" fill="none" />`;
+    labels += `<path d="M ${startCenterX} ${startNode!.y - 14} L ${startCenterX} ${startNode!.y - 3}" stroke="black" stroke-width="0.75" fill="none" />`;
+    labels += `<path d="M ${startCenterX - 3} ${startNode!.y - 7} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 3} ${startNode!.y - 7}" stroke="black" stroke-width="0.75" fill="none" />`;
 
     // END arrow and label
-    labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 15}" stroke="black" stroke-width="1.5" fill="none" />`;
-    labels += `<path d="M ${endCenterX - 4} ${endBottom + 10} L ${endCenterX} ${endBottom + 15} L ${endCenterX + 4} ${endBottom + 10}" stroke="black" stroke-width="1.5" fill="none" />`;
-    labels += `<text x="${endCenterX}" y="${endBottom + 32}" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="bold" fill="black" text-anchor="middle">END</text>`;
+    labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 14}" stroke="black" stroke-width="0.75" fill="none" />`;
+    labels += `<path d="M ${endCenterX - 3} ${endBottom + 10} L ${endCenterX} ${endBottom + 14} L ${endCenterX + 3} ${endBottom + 10}" stroke="black" stroke-width="0.75" fill="none" />`;
+    labels += `<text x="${endCenterX}" y="${endBottom + 28}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="black" text-anchor="middle">END</text>`;
 
     const svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg width="${width}" height="${height}" viewBox="0 -40 ${width} ${height + 80}" xmlns="http://www.w3.org/2000/svg">
