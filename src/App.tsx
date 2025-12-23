@@ -35,18 +35,25 @@ interface MazeData {
 const App = () => {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [params, setParams] = useState({
-    densityBias: 0.2,
-    contrast: 1.9,
-    detailLevel: 5,  // 1-8, maps to subdivision depth
-    edgeFocus: 2.7,
+    // Image preprocessing
+    brightness: 0,        // -100 to 100
+    contrast: 1.9,        // 0.5 to 3
+    gamma: 1.0,           // 0.2 to 3
+    posterize: 0,         // 0 = off, 2-16 levels
     invert: false,
+    // Maze generation
+    densityBias: 0.2,
+    detailLevel: 5,       // 1-8, maps to subdivision depth
+    edgeFocus: 2.7,
+    // Rendering
     wallThickness: 1.0,
-    svgIncludeLabels: false,
-    svgColorByWeight: false,
     shadingIntensity: 1.8,
     showSolution: false,
     showImage: false,
-    resolution: 800
+    resolution: 800,
+    // Export
+    svgIncludeLabels: false,
+    svgColorByWeight: false,
   });
   const [status, setStatus] = useState('Waiting for image...');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -102,9 +109,28 @@ const App = () => {
     const data = imageData.data;
 
     for (let i = 0; i < data.length; i += 4) {
+      // Convert to grayscale
       let gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+
+      // Apply brightness (-100 to 100)
+      gray = gray + params.brightness * 2.55;
+
+      // Apply contrast
       gray = params.contrast * (gray - 128) + 128;
+
+      // Apply gamma correction
+      gray = Math.max(0, Math.min(255, gray));
+      gray = 255 * Math.pow(gray / 255, 1 / params.gamma);
+
+      // Apply posterization (if enabled)
+      if (params.posterize >= 2) {
+        const levels = params.posterize;
+        gray = Math.round(gray / 255 * (levels - 1)) / (levels - 1) * 255;
+      }
+
+      // Apply invert
       if (params.invert) gray = 255 - gray;
+
       data[i] = data[i + 1] = data[i + 2] = Math.max(0, Math.min(255, gray));
     }
     ctx.putImageData(imageData, 0, 0);
@@ -112,7 +138,7 @@ const App = () => {
 
   useEffect(() => {
     if (image) updatePreview(image);
-  }, [params.contrast, params.invert, params.densityBias]);
+  }, [params.brightness, params.contrast, params.gamma, params.posterize, params.invert]);
 
   const generateMaze = () => {
     if (!image) return;
@@ -147,27 +173,46 @@ const App = () => {
       offCtx.drawImage(image, 0, 0, 256, 256);
       const imgData = offCtx.getImageData(0, 0, 256, 256).data;
 
-      const getRawPixelB = (gx: number, gy: number) => {
+      // Apply preprocessing to get processed brightness at a pixel
+      const getProcessedPixelB = (gx: number, gy: number) => {
         const sx = Math.max(0, Math.min(255, Math.floor((gx / mazeWidth) * 255)));
         const sy = Math.max(0, Math.min(255, Math.floor((gy / mazeHeight) * 255)));
         const idx = (sy * 256 + sx) * 4;
-        return (imgData[idx] + imgData[idx + 1] + imgData[idx + 2]) / 3;
+        let gray = (imgData[idx] + imgData[idx + 1] + imgData[idx + 2]) / 3;
+
+        // Apply brightness
+        gray = gray + params.brightness * 2.55;
+
+        // Apply contrast
+        gray = params.contrast * (gray - 128) + 128;
+
+        // Apply gamma
+        gray = Math.max(0, Math.min(255, gray));
+        gray = 255 * Math.pow(gray / 255, 1 / params.gamma);
+
+        // Apply posterization
+        if (params.posterize >= 2) {
+          const levels = params.posterize;
+          gray = Math.round(gray / 255 * (levels - 1)) / (levels - 1) * 255;
+        }
+
+        // Apply invert
+        if (params.invert) gray = 255 - gray;
+
+        return Math.max(0, Math.min(255, gray));
       };
 
       const subdivide = (x: number, y: number, w: number, h: number) => {
-        const rawB = getRawPixelB(x + w / 2, y + h / 2);
-        const rawTL = getRawPixelB(x, y);
-        const rawBR = getRawPixelB(x + w, y + h);
-
-        const bMid = params.contrast * (rawB - 128) + 128;
-        const bTL = params.contrast * (rawTL - 128) + 128;
-        const bBR = params.contrast * (rawBR - 128) + 128;
+        const bMid = getProcessedPixelB(x + w / 2, y + h / 2);
+        const bTL = getProcessedPixelB(x, y);
+        const bBR = getProcessedPixelB(x + w, y + h);
 
         const edgeStrength = Math.abs(bTL - bBR);
         // Scale thresholds relative to resolution for consistency
         const baseResolution = 800;
         const resScale = maxDim / baseResolution;
-        const toneThreshold = ((params.invert ? 255 - bMid : bMid) / 255) * 45 * params.densityBias * resScale;
+        // bMid is already preprocessed (invert applied), so use it directly
+        const toneThreshold = (bMid / 255) * 45 * params.densityBias * resScale;
         const finalThreshold = toneThreshold - (edgeStrength / 255) * 30 * params.edgeFocus * resScale;
 
         const cellSize = Math.min(w, h);
@@ -200,7 +245,7 @@ const App = () => {
             y,
             w,
             h,
-            rawBrightness: rawB,
+            rawBrightness: bMid,  // Store processed brightness
             visited: false,
             neighbors: [],
             connections: new Map()
@@ -309,10 +354,8 @@ const App = () => {
   };
 
   const getWallThickness = (node: MazeNode, neighbor: MazeNode | null = null) => {
-    let rawB = neighbor ? (node.rawBrightness + neighbor.rawBrightness) / 2 : node.rawBrightness;
-    let b = params.contrast * (rawB - 128) + 128;
-    if (params.invert) b = 255 - b;
-    b = Math.max(0, Math.min(255, b));
+    // rawBrightness is already preprocessed (brightness, contrast, gamma, posterize, invert applied)
+    const b = neighbor ? (node.rawBrightness + neighbor.rawBrightness) / 2 : node.rawBrightness;
     return params.wallThickness * (1 + ((1 - b / 255) * params.shadingIntensity));
   };
 
@@ -894,10 +937,10 @@ const App = () => {
       <div className="w-full md:w-80 border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl p-6 flex flex-col gap-6 overflow-y-auto shrink-0 md:h-screen sticky top-0 custom-scroll">
         <div className="space-y-1">
           <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent tracking-tight flex items-center gap-2">
-            <PenTool size={20} className="text-emerald-400" /> Maze Architect
+            <PenTool size={20} className="text-emerald-400" /> Maze Face
           </h1>
           <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
-            Plotter Edition
+            Portrait Mazes for Pen Plotters
           </p>
         </div>
 
@@ -918,6 +961,78 @@ const App = () => {
               height="200"
               className="w-full h-auto rounded-lg border border-slate-800"
             />
+            {/* Image preprocessing controls */}
+            <div className="space-y-2 pt-2 border-t border-slate-800">
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                  <span>Brightness</span>
+                  <span>{params.brightness}</span>
+                </div>
+                <input
+                  type="range"
+                  min="-100"
+                  max="100"
+                  step="5"
+                  value={params.brightness}
+                  onChange={(e) => setParams({ ...params, brightness: parseInt(e.target.value) })}
+                  className="w-full accent-yellow-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                  <span>Contrast</span>
+                  <span>{params.contrast.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="3"
+                  step="0.1"
+                  value={params.contrast}
+                  onChange={(e) => setParams({ ...params, contrast: parseFloat(e.target.value) })}
+                  className="w-full accent-orange-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                  <span>Gamma</span>
+                  <span>{params.gamma.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.2"
+                  max="3"
+                  step="0.1"
+                  value={params.gamma}
+                  onChange={(e) => setParams({ ...params, gamma: parseFloat(e.target.value) })}
+                  className="w-full accent-purple-500"
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                  <span>Posterize</span>
+                  <span>{params.posterize === 0 ? 'Off' : `${params.posterize} levels`}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="16"
+                  step="1"
+                  value={params.posterize}
+                  onChange={(e) => setParams({ ...params, posterize: parseInt(e.target.value) })}
+                  className="w-full accent-pink-500"
+                />
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  checked={params.invert}
+                  onChange={(e) => setParams({ ...params, invert: e.target.checked })}
+                  className="rounded border-slate-700 bg-slate-900"
+                />
+                <span className="text-xs text-slate-400">Invert</span>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-4 p-4 bg-slate-800/30 rounded-xl border border-white/5">
@@ -984,21 +1099,6 @@ const App = () => {
             <label className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase">
               <Zap size={14} /> 3. Likeness Engine
             </label>
-            <div className="space-y-1">
-              <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
-                <span>Visual Contrast</span>
-                <span>{params.contrast.toFixed(1)}</span>
-              </div>
-              <input
-                type="range"
-                min="0.5"
-                max="3"
-                step="0.1"
-                value={params.contrast}
-                onChange={(e) => setParams({ ...params, contrast: parseFloat(e.target.value) })}
-                className="w-full accent-emerald-500"
-              />
-            </div>
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
                 <span>Edge Focus</span>
