@@ -963,15 +963,10 @@ const App = () => {
 
   return (
     <div className="flex flex-col md:flex-row min-h-screen bg-slate-950 text-slate-200 font-sans">
-      <div className="w-full md:w-80 border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl p-6 flex flex-col gap-6 overflow-y-auto shrink-0 md:h-screen sticky top-0 custom-scroll">
-        <div className="space-y-1">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent tracking-tight flex items-center gap-2">
-            <PenTool size={20} className="text-emerald-400" /> Maze Face
-          </h1>
-          <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
-            Portrait Mazes for Pen Plotters
-          </p>
-        </div>
+      <div className="w-full md:w-80 border-r border-slate-800 bg-slate-900/50 backdrop-blur-xl p-4 md:p-6 flex flex-col gap-4 md:gap-6 md:overflow-y-auto shrink-0 md:h-screen md:sticky md:top-0 custom-scroll pb-safe">
+        <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent tracking-tight flex items-center gap-2">
+          <PenTool size={20} className="text-emerald-400" /> Maze Face
+        </h1>
 
         <div className="space-y-4">
           <div className="p-4 bg-slate-950 rounded-xl border border-white/5 space-y-3">
