@@ -70,6 +70,7 @@ const App = () => {
   const [plotterSettings, setPlotterSettings] = useState({
     paperSize: '6x6' as keyof typeof PAPER_SIZES,
     speed: 50,
+    margin: 10,        // mm margin around plot area
     penUpHeight: 70,
     penDownLight: 45,  // Lightest stroke (bright areas)
     penDownDark: 25,   // Heaviest stroke (dark areas)
@@ -714,14 +715,30 @@ const App = () => {
     let border = '';
 
     if (params.svgColorByWeight) {
-      // Add margin for border that extends beyond label area
+      // Add margin for border and labels
       const margin = 50;
       viewBoxX = -margin;
       viewBoxY = -margin;
       viewBoxWidth = width + margin * 2;
       viewBoxHeight = height + margin * 2;
-      // Simple rectangle border in a 5th color (magenta)
+      // Simple rectangle border in magenta
       border = `<rect x="${-margin + 5}" y="${-margin + 5}" width="${width + margin * 2 - 10}" height="${height + margin * 2 - 10}" stroke="#FF00FF" fill="none" />`;
+
+      // START/END labels and arrows in cyan (separate layer)
+      const startCenterX = startNode!.x + startNode!.w / 2;
+      const endCenterX = endNode!.x + endNode!.w / 2;
+      const endBottom = endNode!.y + endNode!.h;
+      const labelColor = '#00FFFF'; // Cyan
+
+      // START label and arrow
+      labels = `<text x="${startCenterX}" y="${startNode!.y - 20}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="${labelColor}" stroke="${labelColor}" stroke-width="0.5" text-anchor="middle">START</text>`;
+      labels += `<path d="M ${startCenterX} ${startNode!.y - 14} L ${startCenterX} ${startNode!.y - 3}" stroke="${labelColor}" stroke-width="0.75" fill="none" />`;
+      labels += `<path d="M ${startCenterX - 3} ${startNode!.y - 7} L ${startCenterX} ${startNode!.y - 3} L ${startCenterX + 3} ${startNode!.y - 7}" stroke="${labelColor}" stroke-width="0.75" fill="none" />`;
+
+      // END arrow and label
+      labels += `<path d="M ${endCenterX} ${endBottom + 3} L ${endCenterX} ${endBottom + 14}" stroke="${labelColor}" stroke-width="0.75" fill="none" />`;
+      labels += `<path d="M ${endCenterX - 3} ${endBottom + 10} L ${endCenterX} ${endBottom + 14} L ${endCenterX + 3} ${endBottom + 10}" stroke="${labelColor}" stroke-width="0.75" fill="none" />`;
+      labels += `<text x="${endCenterX}" y="${endBottom + 28}" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="${labelColor}" stroke="${labelColor}" stroke-width="0.5" text-anchor="middle">END</text>`;
     } else if (params.svgIncludeLabels) {
       const startCenterX = startNode!.x + startNode!.w / 2;
       const endCenterX = endNode!.x + endNode!.w / 2;
@@ -767,10 +784,10 @@ const App = () => {
       const plotter = new Plotter({
         paperWidth: paper.width,
         paperHeight: paper.height,
-        plotWidth: paper.width - 20,
-        plotHeight: paper.height - 20,
-        marginX: 10,
-        marginY: 10,
+        plotWidth: paper.width - plotterSettings.margin * 2,
+        plotHeight: paper.height - plotterSettings.margin * 2,
+        marginX: plotterSettings.margin,
+        marginY: plotterSettings.margin,
         speed: plotterSettings.speed,
         penUpPosition: plotterSettings.penUpHeight,
         penDownLight: plotterSettings.penDownLight,
@@ -890,6 +907,16 @@ const App = () => {
     }
   }, [plotterSettings.penDownLight, plotterSettings.penDownDark]);
 
+  const handleTestBounds = useCallback(async () => {
+    try {
+      setStatus('Tracing plot bounds...');
+      await plotterRef.current?.testBounds();
+      setStatus('Bounds test complete');
+    } catch (err) {
+      setStatus('Bounds test failed');
+    }
+  }, []);
+
   // Update estimated time when maze or settings change
   useEffect(() => {
     if (mazeData.current.nodes.length > 0 && plotterRef.current) {
@@ -909,8 +936,10 @@ const App = () => {
       plotterRef.current.setConfig({
         paperWidth: paper.width,
         paperHeight: paper.height,
-        plotWidth: paper.width - 20,
-        plotHeight: paper.height - 20,
+        plotWidth: paper.width - plotterSettings.margin * 2,
+        plotHeight: paper.height - plotterSettings.margin * 2,
+        marginX: plotterSettings.margin,
+        marginY: plotterSettings.margin,
         speed: plotterSettings.speed,
         penUpPosition: plotterSettings.penUpHeight,
         penDownLight: plotterSettings.penDownLight,
@@ -1232,7 +1261,24 @@ const App = () => {
                       className="w-full accent-emerald-500"
                     />
                   </div>
-                  
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase">
+                      <span>Margin</span>
+                      <span>{plotterSettings.margin}mm</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="25"
+                      step="1"
+                      value={plotterSettings.margin}
+                      onChange={(e) => setPlotterSettings({ ...plotterSettings, margin: parseInt(e.target.value) })}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
                   {/* Invert Pen Lift */}
                   <div className="flex items-center gap-2">
                     <input
@@ -1329,20 +1375,27 @@ const App = () => {
                   </div>
 
                   {/* Utility buttons */}
-                  <div className="flex gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       onClick={handlePlotterHome}
                       disabled={plotterStatus.state === 'plotting'}
-                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                      className="py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
                     >
                       <Home size={12} /> Home
                     </button>
                     <button
+                      onClick={handleTestBounds}
+                      disabled={plotterStatus.state === 'plotting'}
+                      className="py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                    >
+                      Bounds
+                    </button>
+                    <button
                       onClick={handleTestPattern}
                       disabled={plotterStatus.state === 'plotting'}
-                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
+                      className="py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-all"
                     >
-                      Test Pattern
+                      Pattern
                     </button>
                   </div>
 

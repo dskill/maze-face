@@ -12,12 +12,14 @@ const STEPS_PER_MM = 80;
 
 // Default paper sizes in mm
 export const PAPER_SIZES = {
-  'A4': { width: 210, height: 297 },
-  'A5': { width: 148, height: 210 },
-  'Letter': { width: 216, height: 279 },
+  '4x6': { width: 102, height: 152 },
+  '6x4': { width: 152, height: 102 },
   '6x6': { width: 152, height: 152 },
   '8x8': { width: 203, height: 203 },
   '8x10': { width: 203, height: 254 },
+  'A5': { width: 148, height: 210 },
+  'A4': { width: 210, height: 297 },
+  'Letter': { width: 216, height: 279 },
 } as const;
 
 export interface PlotterConfig extends EBBConfig {
@@ -120,11 +122,34 @@ export class Plotter {
 
   /**
    * Convert maze coordinates (0 to mazeSize) to plotter steps
+   * Scales uniformly to fit plot area while preserving aspect ratio, centered
    */
   mazeToSteps(x: number, y: number, mazeWidth: number, mazeHeight: number): { x: number; y: number } {
-    // Scale maze coords to plot area in mm
-    const plotX = this.config.marginX + (x / mazeWidth) * this.config.plotWidth;
-    const plotY = this.config.marginY + (y / mazeHeight) * this.config.plotHeight;
+    // Calculate uniform scale to fit while preserving aspect ratio
+    const mazeAspect = mazeWidth / mazeHeight;
+    const plotAspect = this.config.plotWidth / this.config.plotHeight;
+
+    let scale: number;
+    let offsetX: number;
+    let offsetY: number;
+
+    if (mazeAspect > plotAspect) {
+      // Maze is wider than plot area - fit to width
+      scale = this.config.plotWidth / mazeWidth;
+      const scaledHeight = mazeHeight * scale;
+      offsetX = 0;
+      offsetY = (this.config.plotHeight - scaledHeight) / 2;
+    } else {
+      // Maze is taller than plot area - fit to height
+      scale = this.config.plotHeight / mazeHeight;
+      const scaledWidth = mazeWidth * scale;
+      offsetX = (this.config.plotWidth - scaledWidth) / 2;
+      offsetY = 0;
+    }
+
+    // Apply scale and centering, then add margins
+    const plotX = this.config.marginX + offsetX + x * scale;
+    const plotY = this.config.marginY + offsetY + y * scale;
 
     // Convert mm to steps
     return {
@@ -317,6 +342,33 @@ export class Plotter {
       // Lift pen
       await this.ebb.penUp();
     }
+
+    // Return home
+    await this.ebb.home();
+  }
+
+  /**
+   * Test plot bounds - traces the outline of the plot area with pen lifted
+   * Useful for verifying paper placement before plotting
+   */
+  async testBounds(): Promise<void> {
+    if (!this.ebb) throw new Error('Not connected');
+
+    // Calculate corner positions in steps
+    const left = this.config.marginX * STEPS_PER_MM;
+    const top = this.config.marginY * STEPS_PER_MM;
+    const right = (this.config.marginX + this.config.plotWidth) * STEPS_PER_MM;
+    const bottom = (this.config.marginY + this.config.plotHeight) * STEPS_PER_MM;
+
+    // Ensure pen is up
+    await this.ebb.penUp();
+
+    // Trace the rectangle: top-left → top-right → bottom-right → bottom-left → top-left
+    await this.ebb.moveTo(left, top);
+    await this.ebb.moveTo(right, top);
+    await this.ebb.moveTo(right, bottom);
+    await this.ebb.moveTo(left, bottom);
+    await this.ebb.moveTo(left, top);
 
     // Return home
     await this.ebb.home();
