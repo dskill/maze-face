@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize, Plug, Unplug, Square, Pause, Home } from 'lucide-react';
+import { Download, Play, Eye, EyeOff, Camera, PenTool, Sliders, Type, Monitor, Layers, Zap, Maximize, Plug, Unplug, Square, Pause, Home, MapPin, Trash2 } from 'lucide-react';
 import {
   connectAxiDraw,
   isWebSerialSupported,
@@ -83,6 +83,34 @@ const App = () => {
   const previewRef = useRef<HTMLCanvasElement>(null);
   const mazeData = useRef<MazeData>({ nodes: [], solution: [], startNode: null, endNode: null, width: 0, height: 0 });
 
+  // Waypoint-based forced solution path
+  const [waypoints, setWaypoints] = useState<{ x: number; y: number }[]>([]);
+  const [isPathEditMode, setIsPathEditMode] = useState(false);
+  const [hideWaypoints, setHideWaypoints] = useState(false);
+
+  // Canvas click handlers for waypoint editing
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isPathEditMode) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+
+    setWaypoints(prev => [...prev, { x, y }]);
+  }, [isPathEditMode]);
+
+  const handleCanvasRightClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isPathEditMode) return;
+    e.preventDefault();
+    setWaypoints(prev => prev.slice(0, -1));
+  }, [isPathEditMode]);
+
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -140,6 +168,83 @@ const App = () => {
   useEffect(() => {
     if (image) updatePreview(image);
   }, [params.brightness, params.contrast, params.gamma, params.posterize, params.invert]);
+
+  // Helper: Find the MazeNode that contains or is closest to a point
+  const findNearestNode = (x: number, y: number, nodes: MazeNode[]): MazeNode | null => {
+    if (nodes.length === 0) return null;
+
+    // First check if point is inside any node
+    for (const node of nodes) {
+      if (x >= node.x && x <= node.x + node.w && y >= node.y && y <= node.y + node.h) {
+        return node;
+      }
+    }
+
+    // Otherwise find nearest by center distance
+    let nearest: MazeNode | null = null;
+    let minDist = Infinity;
+    for (const node of nodes) {
+      const centerX = node.x + node.w / 2;
+      const centerY = node.y + node.h / 2;
+      const dist = Math.hypot(x - centerX, y - centerY);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = node;
+      }
+    }
+    return nearest;
+  };
+
+  // Helper: BFS through neighbors (adjacency graph, not connections) to find path between two nodes
+  const findPathBFS = (from: MazeNode, to: MazeNode): MazeNode[] => {
+    if (from.id === to.id) return [from];
+
+    const queue: { node: MazeNode; path: MazeNode[] }[] = [{ node: from, path: [from] }];
+    const visited = new Set<number>([from.id]);
+
+    while (queue.length > 0) {
+      const { node, path } = queue.shift()!;
+      if (node.id === to.id) return path;
+
+      for (const { node: neighbor } of node.neighbors) {
+        if (!visited.has(neighbor.id)) {
+          visited.add(neighbor.id);
+          queue.push({ node: neighbor, path: [...path, neighbor] });
+        }
+      }
+    }
+    return [from]; // Fallback if no path (shouldn't happen in connected quadtree)
+  };
+
+  // Helper: Map waypoints to a complete sequence of MazeNodes
+  const mapWaypointsToPath = (wps: { x: number; y: number }[], nodes: MazeNode[]): MazeNode[] => {
+    if (wps.length === 0 || nodes.length === 0) return [];
+
+    // Map each waypoint to its nearest node
+    const waypointNodes = wps
+      .map(wp => findNearestNode(wp.x, wp.y, nodes))
+      .filter((n): n is MazeNode => n !== null);
+
+    if (waypointNodes.length === 0) return [];
+    if (waypointNodes.length === 1) return waypointNodes;
+
+    // For each consecutive pair, find path through neighbor graph
+    const fullPath: MazeNode[] = [waypointNodes[0]];
+
+    for (let i = 0; i < waypointNodes.length - 1; i++) {
+      const from = waypointNodes[i];
+      const to = waypointNodes[i + 1];
+
+      if (from.id === to.id) continue;
+
+      const pathSegment = findPathBFS(from, to);
+      if (pathSegment.length > 1) {
+        fullPath.push(...pathSegment.slice(1));
+      }
+    }
+
+    return fullPath;
+  };
 
   const generateMaze = () => {
     if (!image) return;
@@ -312,6 +417,32 @@ const App = () => {
         });
       });
 
+      // Handle forced solution path if waypoints are set
+      let forcedPath: MazeNode[] = [];
+      if (waypoints.length >= 2) {
+        forcedPath = mapWaypointsToPath(waypoints, nodes);
+
+        if (forcedPath.length >= 2) {
+          // Force connections along the path
+          for (let i = 0; i < forcedPath.length - 1; i++) {
+            const curr = forcedPath[i];
+            const next = forcedPath[i + 1];
+
+            const neighborInfo = curr.neighbors.find(n => n.node.id === next.id);
+            if (neighborInfo) {
+              curr.connections.set(next, neighborInfo.mid);
+              next.connections.set(curr, neighborInfo.mid);
+              curr.visited = true;
+              next.visited = true;
+            }
+          }
+
+          // Override start and end nodes
+          startNode = forcedPath[0];
+          endNode = forcedPath[forcedPath.length - 1];
+        }
+      }
+
       const stack = [startNode];
       startNode.visited = true;
       while (stack.length > 0) {
@@ -329,20 +460,25 @@ const App = () => {
         }
       }
 
-      const queue: { node: MazeNode; path: MazeNode[] }[] = [{ node: startNode, path: [] }];
-      const visited = new Set([startNode]);
+      // Use forced path as solution if set, otherwise find via BFS
       let solution: MazeNode[] = [];
-      while (queue.length > 0) {
-        const { node, path } = queue.shift()!;
-        const curPath = [...path, node];
-        if (node.id === endNode.id) {
-          solution = curPath;
-          break;
-        }
-        for (const [neighbor] of node.connections) {
-          if (!visited.has(neighbor)) {
-            visited.add(neighbor);
-            queue.push({ node: neighbor, path: curPath });
+      if (forcedPath.length >= 2) {
+        solution = forcedPath;
+      } else {
+        const queue: { node: MazeNode; path: MazeNode[] }[] = [{ node: startNode, path: [] }];
+        const visited = new Set([startNode]);
+        while (queue.length > 0) {
+          const { node, path } = queue.shift()!;
+          const curPath = [...path, node];
+          if (node.id === endNode.id) {
+            solution = curPath;
+            break;
+          }
+          for (const [neighbor] of node.connections) {
+            if (!visited.has(neighbor)) {
+              visited.add(neighbor);
+              queue.push({ node: neighbor, path: curPath });
+            }
           }
         }
       }
@@ -352,6 +488,12 @@ const App = () => {
       setIsGenerating(false);
       setStatus('Likeness captured.');
     }, 100);
+  };
+
+  const clearMaze = () => {
+    mazeData.current = { nodes: [], solution: [], startNode: null, endNode: null, width: 0, height: 0 };
+    setMazeGenerated(prev => prev + 1); // Trigger re-render
+    setStatus('Maze cleared.');
   };
 
   const getWallThickness = (node: MazeNode, neighbor: MazeNode | null = null) => {
@@ -368,18 +510,29 @@ const App = () => {
 
     const { nodes, startNode, endNode, width, height } = mazeData.current;
 
-    // Update canvas size to match maze dimensions
+    // Update canvas size - use maze dimensions if available, otherwise use image aspect ratio
     if (width > 0 && height > 0) {
       canvas.width = width;
       canvas.height = height;
+    } else if (image) {
+      // No maze yet - size canvas based on image aspect ratio
+      const aspectRatio = image.width / image.height;
+      if (aspectRatio >= 1) {
+        canvas.width = params.resolution;
+        canvas.height = Math.round(params.resolution / aspectRatio);
+      } else {
+        canvas.height = params.resolution;
+        canvas.width = Math.round(params.resolution * aspectRatio);
+      }
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (params.showImage && image) {
-      ctx.globalAlpha = 0.12;
+    // Show preview image when no maze generated, or ghost image if enabled
+    if (image && (nodes.length === 0 || params.showImage)) {
+      ctx.globalAlpha = nodes.length === 0 ? 0.5 : 0.12;
       ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       ctx.globalAlpha = 1.0;
     }
@@ -496,6 +649,39 @@ const App = () => {
       );
       ctx.stroke();
       ctx.shadowBlur = 0;
+    }
+
+    // Draw waypoint preview (show when editing or when waypoints exist and not hidden)
+    if (waypoints.length > 0 && !hideWaypoints) {
+      // Draw dashed line connecting waypoints
+      if (waypoints.length >= 2) {
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(waypoints[0].x, waypoints[0].y);
+        for (let i = 1; i < waypoints.length; i++) {
+          ctx.lineTo(waypoints[i].x, waypoints[i].y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Draw waypoint markers
+      waypoints.forEach((wp, index) => {
+        // Circle
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(wp.x, wp.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Number label
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 10px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(index + 1), wp.x, wp.y);
+      });
     }
   };
 
@@ -958,7 +1144,11 @@ const App = () => {
     params.shadingIntensity,
     params.contrast,
     params.showImage,
-    params.resolution
+    params.resolution,
+    isPathEditMode,
+    waypoints,
+    hideWaypoints,
+    image
   ]);
 
   return (
@@ -1138,6 +1328,64 @@ const App = () => {
                 className="w-full accent-emerald-500"
               />
             </div>
+          </div>
+
+          {/* Custom Solution Path Panel */}
+          <div className="space-y-4 p-4 bg-gradient-to-br from-amber-900/20 to-orange-900/20 rounded-xl border border-amber-500/20">
+            <label className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase">
+              <MapPin size={14} /> Custom Path
+            </label>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsPathEditMode(!isPathEditMode)}
+                className={`flex-1 py-2 rounded-lg font-bold text-xs transition-all ${
+                  isPathEditMode
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {isPathEditMode ? 'Exit Edit Mode' : 'Edit Path'}
+              </button>
+              <button
+                onClick={() => setWaypoints([])}
+                disabled={waypoints.length === 0}
+                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 rounded-lg text-xs font-bold"
+              >
+                Clear
+              </button>
+            </div>
+
+            {isPathEditMode && (
+              <div className="text-xs text-slate-400 space-y-1">
+                <p>Click canvas to add waypoints</p>
+                <p>Right-click to remove last</p>
+              </div>
+            )}
+
+            <div className="text-xs">
+              {waypoints.length === 0 && (
+                <span className="text-slate-500">No waypoints set (uses default path)</span>
+              )}
+              {waypoints.length === 1 && (
+                <span className="text-amber-400">1 waypoint (need at least 2)</span>
+              )}
+              {waypoints.length >= 2 && (
+                <span className="text-green-400">{waypoints.length} waypoints ready</span>
+              )}
+            </div>
+
+            {waypoints.length > 0 && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={hideWaypoints}
+                  onChange={(e) => setHideWaypoints(e.target.checked)}
+                  className="rounded border-slate-700 bg-slate-900"
+                />
+                <span className="text-xs text-slate-400">Hide waypoints</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 p-4 bg-slate-800/30 rounded-xl border border-white/5">
@@ -1477,19 +1725,29 @@ const App = () => {
         </div>
 
         <div className="mt-auto space-y-2 pb-4">
-          <button
-            onClick={generateMaze}
-            disabled={!image || isGenerating}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95"
-          >
-            {isGenerating ? (
-              'Building Structure...'
-            ) : (
-              <>
-                <Play size={18} /> Generate Maze
-              </>
-            )}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={generateMaze}
+              disabled={!image || isGenerating}
+              className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95"
+            >
+              {isGenerating ? (
+                'Building Structure...'
+              ) : (
+                <>
+                  <Play size={18} /> Generate Maze
+                </>
+              )}
+            </button>
+            <button
+              onClick={clearMaze}
+              disabled={!mazeData.current.nodes.length || isGenerating}
+              className="py-3 px-4 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 rounded-xl font-bold flex items-center justify-center transition-all"
+              title="Clear maze"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
 
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -1537,7 +1795,9 @@ const App = () => {
             ref={canvasRef}
             width={mazeData.current.width || params.resolution}
             height={mazeData.current.height || params.resolution}
-            className="w-full h-auto bg-white rounded-2xl shadow-2xl transition-transform duration-500"
+            className={`w-full h-auto bg-white rounded-2xl shadow-2xl transition-transform duration-500 ${isPathEditMode ? 'cursor-crosshair' : ''}`}
+            onClick={handleCanvasClick}
+            onContextMenu={handleCanvasRightClick}
           />
           {isGenerating && (
             <div className="absolute inset-0 bg-white/60 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center gap-4 z-20">
