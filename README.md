@@ -4,7 +4,11 @@ Turn portraits into solvable mazes. The maze structure adapts to image featuresâ
 
 **[Try it live â†’](https://dskill.github.io/maze-face/)**
 
-![Example maze portrait](https://via.placeholder.com/600x400?text=Example+Coming+Soon)
+![Maze Face app interface](images/app-screenshot2.png)
+
+## Example Output
+
+![Lisa maze portrait](images/lisa-maze.jpg)
 
 ## Features
 
@@ -20,6 +24,7 @@ Turn portraits into solvable mazes. The maze structure adapts to image featuresâ
 3. Generate the maze
 4. Export SVG or plot directly
 
+
 ## Local Development
 
 ```bash
@@ -30,7 +35,3 @@ npm run dev
 ## Plotter Notes
 
 The AxiDraw integration uses WebSerial (Chrome/Edge only). Connect your plotter, calibrate pen heights with the test buttons, then plot.
-
-## License
-
-MIT
